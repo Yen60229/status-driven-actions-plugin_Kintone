@@ -132,47 +132,6 @@
     }
   };
 
-  const TIME_VALUE_SOURCES = new Set(['now', 'today', 'nowTime']);
-  const ruleNeedsServerTime = (rule) => {
-    if (TIME_VALUE_SOURCES.has(rule.valueSource)) return true;
-    if (rule.valueSource === 'appendSubtable') {
-      const subRules = (rule.valueParam && rule.valueParam.subRules) || [];
-      return subRules.some((sr) => TIME_VALUE_SOURCES.has(sr.valueSource));
-    }
-    if ((rule.fieldMapping || []).some((m) => TIME_VALUE_SOURCES.has(m.valueSource))) return true;
-    if ((rule.keyMapping || []).some((m) => TIME_VALUE_SOURCES.has(m.valueSource))) return true;
-    return false;
-  };
-
-  let _timeCache = { at: 0, value: null };
-  const SERVER_TIME_CACHE_MS = 5000;
-  const SERVER_TIME_TIMEOUT_MS = 500;
-
-  const getServerTime = async () => {
-
-    if (_timeCache.value && (Date.now() - _timeCache.at) < SERVER_TIME_CACHE_MS) {
-      return _timeCache.value;
-    }
-
-    try {
-
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), SERVER_TIME_TIMEOUT_MS);
-      const res = await fetch(location.href, { method: 'HEAD', cache: 'no-store', signal: ctl.signal });
-      clearTimeout(timer);
-      const dateHeader = res.headers.get('Date');
-      const t = dateHeader ? new Date(dateHeader) : new Date();
-      _timeCache = { at: Date.now(), value: t };
-      return t;
-    } catch (e) {
-
-      console.warn('[sda][getServerTime] fallback to local time:', e.name || e.message);
-      const t = new Date();
-      _timeCache = { at: Date.now(), value: t };
-      return t;
-    }
-  };
-
   const checkEditPermission = async (recordId) => {
     try {
       const resp = await kintone.api(
@@ -370,14 +329,14 @@
       }));
 
   const resolveValue = async (spec, ctx) => {
-    const { event, record, serverTime } = ctx;
+    const { event, record } = ctx;
     let _resolvedValue;
     switch (spec.valueSource) {
       case 'fixed':         _resolvedValue = spec.valueParam; break;
       case 'loginUser':     _resolvedValue = kintone.getLoginUser(); break;
-      case 'today':         _resolvedValue = toISODate(serverTime || new Date()); break;
-      case 'nowTime':       _resolvedValue = toHHmm(serverTime || new Date()); break;
-      case 'now':           _resolvedValue = (serverTime || new Date()).toISOString(); break;
+      case 'today':         _resolvedValue = toISODate(new Date()); break;
+      case 'nowTime':       _resolvedValue = toHHmm(new Date()); break;
+      case 'now':           _resolvedValue = new Date().toISOString(); break;
       case 'recordNumber':  _resolvedValue = record.$id && record.$id.value; break;
       case 'recordId':      _resolvedValue = record.$id && record.$id.value; break;
       case 'appId':         _resolvedValue = getAppId(); break;
@@ -460,7 +419,7 @@
         const prevTimeStr = prev.value[sinceField] && prev.value[sinceField].value;
         if (!prevTimeStr) { _resolvedValue = 0; break; }
         const prevDate = new Date(prevTimeStr);
-        const now = serverTime || new Date();
+        const now = new Date();
         const diffMin = Math.round((now.getTime() - prevDate.getTime()) / 60000);
         _resolvedValue = Number.isFinite(diffMin) && diffMin >= 0 ? diffMin : 0;
         break;
@@ -838,21 +797,11 @@
 
     if (!CONFIG.rules || CONFIG.rules.length === 0) return event;
 
-    const needsTime = CONFIG.rules.some((r) =>
-      r.enabled !== false && triggerMatches(r, trigger) && ruleNeedsServerTime(r)
-    );
-
-    const serverTimePromise = needsTime ? getServerTime() : Promise.resolve(null);
     const editCheckPromise  = (trigger === 'process.proceed' && SELF_TOKEN && record.$id?.value)
       ? checkEditPermission(record.$id.value)
       : null;
 
-    const serverTime = await serverTimePromise;
-    if (trigger === 'process.proceed') {
-    }
-    (CONFIG.rules || []).forEach((r, i) => {
-    });
-    const ctx = { event, record, trigger, serverTime };
+    const ctx = { event, record, trigger };
 
     const matched = (CONFIG.rules || []).filter((r) =>
       r.enabled !== false && triggerMatches(r, trigger) && statusMatches(r, event, record)
