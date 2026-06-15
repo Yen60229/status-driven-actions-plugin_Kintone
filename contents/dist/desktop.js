@@ -285,7 +285,7 @@
   // ===== 網路攔截器：記錄 kintone 自身的記錄動作請求（簽核 / 存檔）成敗 =====
   // 這些動作發生在外掛 event handler return 之後，事件模型攔不到，必須包裝底層 fetch / XHR。
   // 只記「動作型」端點（updateWithStatus = 簽核+編輯、update、create、status），且僅 LOG_APP 有設定時。
-  const ACTION_URL_RE = /\/k\/(api\/record\/(updateWithStatus|update|create)|v1\/record\/status|v1\/records?)\b/;
+  const ACTION_URL_RE = /\/k\/(api\/record\/(updateWithStatus|update|create)|v1\/record\/status)\b/;
   // 防遞迴：外掛自己寫 Log（postLog）也會發 fetch，期間設 true 讓攔截器跳過。
   let _logInFlight = false;
 
@@ -293,8 +293,7 @@
     if (/updateWithStatus/.test(url)) return 'kintone.proceed';
     if (/\/api\/record\/update/.test(url)) return 'kintone.update';
     if (/\/api\/record\/create/.test(url)) return 'kintone.create';
-    if (/v1\/record\/status/.test(url)) return 'kintone.status';
-    return 'kintone.action';
+    return 'kintone.status';
   };
 
   const recordIdFromUrl = (url) => {
@@ -980,10 +979,9 @@
     const errored = !!(ev && ev.error);
     // 簽核(proceed)的成敗改由網路攔截器（updateWithStatus）記錄，避免一次簽核出現兩筆。
     // 但「規則錯誤導致簽核被中止」時 kintone 不會送出 updateWithStatus、攔截器看不到，這裡仍要補記。
-    const skipProceedSuccess = (trigger === 'process.proceed') && !errored;
-    if (LOG_APP && (_runInfo.matched > 0 || thrown) && !skipProceedSuccess) {
+    // 成功一律由網路攔截器（來源 B）記錄，A 只補記「規則出錯擋住動作」的失敗。
+    if (LOG_APP && (_runInfo.matched > 0 || thrown) && errored) {
       const info = _runInfo.error;
-      // 失敗 → 寫原始技術訊息（含錯誤碼 + 規則名）；成功 → 寫命中的規則清單。
       const category = errored ? (info ? info.category : 'system') : 'success';
       const message = errored
         ? (info
