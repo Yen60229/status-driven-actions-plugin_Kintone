@@ -230,7 +230,7 @@
 | 值的來源 | 要填什麼 | 範例 |
 |---|---|---|
 | 固定值 | 要填入的文字或數字 | `已完成` |
-| 從本記錄欄位複製 | 來源欄位的**欄位代碼** | `顧客コード` |
+| 從本記錄欄位複製 | 來源欄位的**欄位代碼** | `客戶代號` |
 | 簡易計算式 | 計算公式，欄位代碼用 `{}` 包起來 | `{数量}*{単価}` |
 | Append 子表一筆 | JSON 格式（見第 6 節範例） | — |
 
@@ -271,7 +271,7 @@
 | 從狀態 | `*`（任意） |
 | 到狀態 | `核准完了` |
 | 動作 | 寫入本記錄欄位 |
-| 目標欄位 | 核准日付 |
+| 目標欄位 | 核准日期 |
 | 值的來源 | 今天 |
 | 僅空白時寫入 | ☑（只記錄第一次） |
 
@@ -293,18 +293,18 @@
 | 到狀態 | `*` |
 | 動作名稱 | `*` |
 | 動作 | 寫入本記錄欄位 |
-| 目標欄位 | 承認履歴（子表格欄位） |
+| 目標欄位 | 流程履歷（子表格欄位） |
 | 值的來源 | Append 子表一筆 |
 | 值的參數 | （填入以下 JSON） |
 
 ```json
 {
   "subRules": [
-    { "targetField": "実行者",   "valueSource": "loginUser" },
-    { "targetField": "実行日時", "valueSource": "now" },
-    { "targetField": "動作",     "valueSource": "actionName" },
-    { "targetField": "変更前",   "valueSource": "currentStatus" },
-    { "targetField": "変更後",   "valueSource": "nextStatus" }
+    { "targetField": "建立者",     "valueSource": "loginUser" },
+    { "targetField": "建立時間",   "valueSource": "now" },
+    { "targetField": "動作名稱",   "valueSource": "actionName" },
+    { "targetField": "變更前狀態", "valueSource": "currentStatus" },
+    { "targetField": "變更後狀態", "valueSource": "nextStatus" }
   ]
 }
 ```
@@ -318,12 +318,12 @@
 | 設定項目 | 填入值 |
 |---|---|
 | 觸發時機 | 流程推進時 |
-| 到狀態 | `出荷済` |
+| 到狀態 | `已出貨` |
 | 動作 | 寫入其他 App 記錄 |
 | 寫入模式 | 更新（依 key 找） |
 | 目標 App ID | `42`（客戶主檔的 App ID） |
-| Key 對應 | `[{"targetField":"顧客コード","valueSource":"fieldCopy","valueParam":"顧客コード"}]` |
-| 欄位對應 | `[{"targetField":"最終出荷日","valueSource":"today"}]` |
+| Key 對應 | `[{"targetField":"客戶代號","valueSource":"fieldCopy","valueParam":"客戶代號"}]` |
+| 欄位對應 | `[{"targetField":"最後出貨日","valueSource":"today"}]` |
 
 ---
 
