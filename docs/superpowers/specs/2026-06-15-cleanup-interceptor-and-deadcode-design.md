@@ -1,119 +1,123 @@
-# 設計：移除全域攔截器、改本機時間、清除死碼
+# 設計：拿掉全域攔截器、時間改吃本機、順手清死碼
 
-> 日期：2026-06-15　　目標版本：v1.5.0　　狀態：待實作
->
-> 適用檔案：`contents/dist/desktop.js`、`contents/dist/mobile.js`（內容相同，需同步修改）
+日期：2026-06-15　目標版本：v1.5.0　狀態：待實作
 
-## 背景
+動到的檔案：`contents/dist/desktop.js`、`contents/dist/mobile.js`。這兩個檔內容一模一樣，改完要記得同步。
 
-「狀態驅動動作外掛」是**單筆、事件驅動**型外掛：只註冊 6 個使用者操作事件，每次只處理當前 `event.record`，所有 API 查詢都是 `limit 1`，從不批次處理大量記錄。因此一般「批次效能」原則（分批、cursor 分頁、Map 取代巢狀迴圈、批量更新）對它多半不適用——它本來就符合。
+## 為什麼要做這件事
 
-真正偏離「被動、輕量、不污染全域」原則、且累積了死碼的，是 v1.4.0 之後加入的兩處，這份設計專門清理它們。
+這個外掛說穿了就是個「單筆、被事件帶著跑」的東西。它只掛了 6 個使用者操作事件，每次也只碰當下那一筆 `event.record`，所有 API 查詢都是 `limit 1`，從頭到尾沒有一次撈一堆記錄回來算。所以那些講批次效能的招（分批、cursor 分頁、用 Map 取代雙層迴圈、批量更新）對它幾乎都用不上——它本來就沒這個問題。
 
-## 目標
+真正有點臭的是 v1.4.0 之後塞進來的兩段：一個會去蓋掉整頁的網路請求，一個每次動作都偷打一個網路來對時間。這兩段也順便養出一堆死碼。這份設計就是專門來收這兩攤。
 
-1. **移除全域 `window.fetch` / `XMLHttpRequest` 攔截器**，改用 kintone 官方事件記錄 log（方案 A）。
-2. **`getServerTime()` 改為純本機時間** `new Date()`，移除每次動作當下的網路往返。
-3. **清除所有連帶死碼**：攔截器相關、server-time 相關、空迴圈、用不到的 `detail.show` 分支。
+## 要做到什麼
 
-非目標：不改外掛的功能行為（規則套用、跨 App 寫入、補償寫入、設定畫面）；不加任何後台/雲端運算。
+1. 把覆寫 `window.fetch` / `XMLHttpRequest` 的那段全域攔截器拿掉，log 改走 kintone 官方事件（下面叫方案 A）。
+2. `getServerTime()` 不要再打網路，直接吃本機 `new Date()`。
+3. 上面兩件事一改，會牽連出一票死碼，一起掃乾淨。
+
+不做的事：不動任何既有功能（規則套用、跨 App 寫入、補償寫入、設定畫面那些都不碰），也不會多拉什麼後台或雲端運算進來。
 
 ---
 
-## 一、Log 記錄改為方案 A（核心變更）
+## 一、log 改成方案 A（這次的重點）
 
-### 現況分工（v1.4.3）
+### 現在是怎麼記的（v1.4.3）
 
-- **來源 A（事件 `loggedApply`）**：條件 `(matched>0 || thrown) && errored` → **只記失敗**（規則出錯擋住動作）。
-- **來源 B（全域攔截器）**：包住底層 `fetch` / `XHR`，記**所有成功** + kintone 原生動作（簽核 `updateWithStatus` / 存檔 `update` / `create` / `status`）的 HTTP 失敗。
+現況拆成兩個來源：
 
-問題：來源 B 永久覆寫整頁 `fetch` / `XHR`，對頁面上每個請求跑 regex；會影響同頁其他外掛；常駐無法釋放；需 `_logInFlight` 防遞迴；與來源 A 需互相協調避免重複記錄。
+- **來源 A，事件這邊的 `loggedApply`**：條件是 `(matched>0 || thrown) && errored`，所以它其實只記失敗——就是規則自己出錯把動作擋下來那種。
+- **來源 B，全域攔截器**：把底層的 `fetch` / `XHR` 包起來，負責記所有成功，外加 kintone 原生動作（簽核 `updateWithStatus`、存檔 `update` / `create` / `status`）在 HTTP 層失敗的情況。
 
-### 攔截器存在的唯一理由
+來源 B 的問題就在它太霸道：永久把整頁的 `fetch` / `XHR` 換成自己的版本，頁面上每個請求都要先過它一次 regex；同一頁要是還有別的外掛也會被波及；而且它一旦掛上去就拿不下來，還得靠 `_logInFlight` 這個旗標防自己遞迴，跟來源 A 之間也要小心翼翼避免同一個動作記兩筆。
 
-kintone 原生「簽核」(`process.proceed`) 真正送出的 HTTP 請求發生在**外掛 handler `return` 之後**，而 kintone **沒有 `process.proceed.success` 事件**可掛。攔截底層請求是唯一能觀察「簽核 HTTP 成敗」的辦法。
+### 攔截器到底為什麼會存在
 
-> 對照：**存檔**（create/edit）有官方 `*.submit.success` 事件，**不需要**攔截器。
+關鍵在簽核。kintone 原生的「簽核」(`process.proceed`) 真正那個 HTTP 請求，是在外掛 handler `return` **之後**才送出去的，而 kintone 又沒有 `process.proceed.success` 這種事件可以讓你掛。換句話說，想知道「這次簽核到底有沒有成功」，唯一的辦法就是去攔底層請求。攔截器就是為這件事生的。
 
-### 方案 A：官方事件 + 簽核樂觀記錄
+存檔（create / edit）就沒這個困擾，它有官方的 `*.submit.success` 可以掛，根本不需要攔截器。
 
-刪除攔截器，log 改由事件層產生：
+### 方案 A 怎麼做
 
-| 事件 | 失敗記錄 | 成功記錄 |
+把攔截器整段砍掉，log 全部回到事件層來產生：
+
+| 事件 | 失敗怎麼記 | 成功怎麼記 |
 |---|---|---|
-| `create.submit` / `edit.submit` | 規則出錯 → 在 submit handler（`loggedApply`）記失敗（同現況） | 改掛官方 `create.submit.success` / `edit.submit.success`，存檔由 kintone 確認後才記成功 |
-| `process.proceed` | 規則出錯擋住簽核 → 在 proceed handler 記失敗（同現況） | 在 proceed handler 內，規則套用完且無錯（有 SELF_TOKEN 時 edit-check 通過）即**樂觀記成功** |
+| `create.submit` / `edit.submit` | 規則出錯，照舊在 submit handler（`loggedApply`）記一筆失敗 | 改掛官方 `create.submit.success` / `edit.submit.success`，等 kintone 確定存好了才記成功 |
+| `process.proceed` | 規則出錯擋住簽核，照舊在 proceed handler 記失敗 | 在 proceed handler 裡，規則跑完沒出錯（有設 SELF_TOKEN 的話再加上 edit-check 過）就先當成功記下去 |
 
-**取捨（明確記錄）**：簽核成功是「外掛已乾淨送出」的樂觀記錄，不是 kintone 最終 HTTP commit。實務上 handler 乾淨 `return` 後簽核幾乎不會在 HTTP 層失敗；真失敗時使用者當場可見、記錄狀態也不會改變。以這 5% 精確度換掉一個污染全域、跑在每個請求上的 monkey-patch，划算。
+這裡有個取捨講清楚：簽核成功這筆是「外掛這邊乾淨送出去了」的樂觀記錄，不等於 kintone 最後真的 commit 成功。但實際上 handler 都乾淨 `return` 了，簽核在 HTTP 層再失敗的機率很低；真的失敗使用者當下也看得到，記錄狀態本來就不會變。為了這 5% 的精準度，去養一個會蓋掉全域、每個請求都要插一腳的 monkey-patch，不值得。
 
-**log 語意維持相容**：使用者在 Log App 仍會看到「成功 / 失敗」兩類記錄，欄位與分類（`LOG_RESULT` / `LOG_CATEGORY` / `LOG_MESSAGE` 等）格式不變。失去的只有「kintone 因外掛以外的原因擋掉簽核」這種罕見、且外掛管理員無法修正的記錄。
+對使用者來說 log 的體感不變：Log App 裡一樣看得到成功、失敗兩種記錄，欄位跟分類（`LOG_RESULT`、`LOG_CATEGORY`、`LOG_MESSAGE` 那些）格式照舊。唯一會少掉的，是「簽核被 kintone 因為外掛以外的原因擋掉」這種記錄——而這種事本來就少見，外掛管理員看到了也修不了。
 
-### 成功記錄的訊息內容
+### 成功訊息寫什麼
 
-沿用現有格式：`已套用 N 條規則：規則A、規則B`（取自 `_runInfo.matched` / `_runInfo.labels`）。
-- proceed：在 proceed handler 結束時若 `matched>0 && !errored` 寫一筆成功。
-- submit.success：需把該次 submit 的 `matched`/`labels` 帶到對應的 success 事件再寫（success 事件緊接 submit 觸發，中間無其他事件）。具體傳遞方式留待實作計畫。
+沿用現在的格式：`已套用 N 條規則：規則A、規則B`，資料就從 `_runInfo.matched` / `_runInfo.labels` 拿。
 
-> 細節（變數傳遞、`loggedApply` 條件式調整）屬實作層，於 writing-plans 階段定義。
+- proceed：handler 收尾時如果 `matched>0 && !errored` 就寫一筆成功。
+- submit.success：要把這次 submit 的 `matched` / `labels` 帶到對應的 success 事件再寫（success 緊接在 submit 後面觸發，中間不會插別的事件）。怎麼帶留到實作計畫再定。
+
+實作層的細節（變數怎麼傳、`loggedApply` 條件式怎麼調）這邊先不寫死，等 writing-plans 再處理。
 
 ---
 
-## 二、`getServerTime()` 改本機時間
+## 二、時間改吃本機
 
-現況：需要 `now`/`today`/`nowTime` 時，對 `location.href` 發 `HEAD` 取回應 `Date` header（5 秒快取、500ms timeout、失敗退回本機），用意是避開使用者端時鐘誤差。代價是在簽核/存檔的當下多一個網路往返。
+現在要用到 `now` / `today` / `nowTime` 的時候，它會對 `location.href` 發一個 `HEAD`，從回應的 `Date` header 取時間（還做了 5 秒快取、500ms timeout，失敗才退回本機），用意是怕使用者電腦時鐘不準。代價就是每次簽核、存檔的當下都多一趟網路。
 
-變更：直接用 `new Date()`。日期/時間值由瀏覽器本機時鐘產生。
+改法：直接 `new Date()`，日期時間就吃瀏覽器本機時鐘。
 
-連帶移除（變死碼）：
+跟著一起變死碼、要清掉的：
+
 - `TIME_VALUE_SOURCES`、`ruleNeedsServerTime`
 - `_timeCache`、`SERVER_TIME_CACHE_MS`、`SERVER_TIME_TIMEOUT_MS`、`getServerTime`
-- `applyRules` 內 `needsTime` / `serverTimePromise` / `serverTime` 的判斷與等待
-- `ctx` 不再帶 `serverTime`；`resolveValue` 與 `elapsedMinutes` 內 `serverTime || new Date()` 簡化為 `new Date()`
+- `applyRules` 裡那段 `needsTime` / `serverTimePromise` / `serverTime` 的判斷跟等待
+- `ctx` 不用再帶 `serverTime`；`resolveValue` 跟 `elapsedMinutes` 裡的 `serverTime || new Date()` 直接收斂成 `new Date()`
 
 ---
 
-## 三、死碼清除清單（desktop.js / mobile.js 同步）
+## 三、要清的死碼（兩個檔同步）
 
-| 區塊 | 行（desktop.js 現況）| 原因 |
+| 區塊 | 行數（對 desktop.js 現況）| 為什麼是死碼 |
 |---|---|---|
-| 攔截器：`ACTION_URL_RE`、`_logInFlight`、`actionEventName`、`recordIdFromUrl`、`logKintoneAction`、`if (LOG_APP){…fetch/XHR patch…}` | 約 285–363 | 方案 A 不再需要 |
-| server-time 一整組（見第二節） | 135–174、841–855 相關 | 改本機時間後無用 |
-| 空 `if (trigger === 'process.proceed') {}` 與空 `CONFIG.rules.forEach((r,i)=>{})` | 851–854 | 移除 console.log 後殘留的空殼，後者仍空轉遍歷所有規則 |
-| `statusMatches` switch 內用不到的 `case 'detail.show':` 標籤 | 約 656 | 設定畫面 `TRIGGERS` 不提供 `detail.show`，使用者建不出該規則，分支不可達 |
+| 攔截器整組：`ACTION_URL_RE`、`_logInFlight`、`actionEventName`、`recordIdFromUrl`、`logKintoneAction`、`if (LOG_APP){…fetch/XHR patch…}` | 約 285–363 | 方案 A 用不到了 |
+| server-time 一整組（見第二節） | 135–174、以及 841–855 相關 | 改本機時間後就沒用了 |
+| 空的 `if (trigger === 'process.proceed') {}` 跟空的 `CONFIG.rules.forEach((r,i)=>{})` | 851–854 | 之前砍 console.log 留下來的空殼，後面那個還在空轉遍歷全部規則 |
+| `statusMatches` 裡那個碰不到的 `case 'detail.show':` | 約 656 | 設定畫面的 `TRIGGERS` 根本沒給 `detail.show`，使用者建不出這種規則，分支永遠進不去 |
 
-保留（非死碼）：`triggerMatches`（仍被 `applyRules` 使用）、`writeLog` 內的 `recIdFromPage`（成功/失敗記錄仍需從網址補抓 record id）、`detail.show` 事件本身的 `handleDetailShow`（補償寫入入口）。
+要留著、不是死碼的：`triggerMatches`（`applyRules` 還在用）、`writeLog` 裡的 `recIdFromPage`（記成功失敗時還是得從網址補抓 record id）、`detail.show` 事件本身的 `handleDetailShow`（補償寫入的入口）。
 
-> 「`detail.show` 不跑 `applyRules`」經查證**不是 bug**：`config.js` 的 `TRIGGERS` 只提供 create.show / edit.show / create.submit / edit.submit / process.proceed 五種觸發時機，沒有 detail.show，使用者無法建立該觸發的規則。
-
----
-
-## 四、保留不動
-
-- **`compensationWrite` 的 `location.reload()`**：補償寫入跑在**詳情頁**，而 `kintone.app.record.set()` 不適用於詳情頁，REST PUT 後畫面為舊資料，需 reload 才能反映。此路徑罕見（僅「下一狀態無編輯權限 + 有設 SELF_TOKEN」時），保留 reload 是正確取捨。
-- 規則套用、跨 App 寫入、子表履歷模式、欄位條件、設定畫面（`config.js`）等所有功能行為。
+附帶一提，「`detail.show` 沒去跑 `applyRules`」查過了，**不是 bug**。`config.js` 的 `TRIGGERS` 只開了 create.show / edit.show / create.submit / edit.submit / process.proceed 這五種，沒有 detail.show，使用者根本建不出掛在 detail.show 的規則。
 
 ---
 
-## 五、驗證
+## 四、不動的部分
 
-無自動化測試框架，採手動驗證（在裝有外掛的測試 App）：
+- **`compensationWrite` 裡的 `location.reload()`**：補償寫入是跑在詳情頁，偏偏 `kintone.app.record.set()` 在詳情頁不能用，REST PUT 寫完畫面還是舊的，只能 reload 才看得到新值。而且這條路只有「下一個狀態沒編輯權限、又有設 SELF_TOKEN」才會走到，很少見，reload 留著是對的。
+- 規則套用、跨 App 寫入、子表履歷模式、欄位條件、設定畫面（`config.js`）這些功能行為通通照舊。
 
-1. **存檔成功 log**：建立一條 create.submit 規則 + 設定 Log App → 新增記錄存檔 → Log App 出現一筆「成功」、訊息列出命中規則。
-2. **存檔失敗 log**：故意讓規則出錯（如目標欄位代碼錯）→ 存檔被擋 → Log 出現「失敗」+ 分類。
-3. **簽核成功 log**：proceed 規則 → 按流程按鈕 → Log 出現「成功」。
-4. **簽核失敗 log**：規則出錯擋住簽核 → Log 出現「失敗」。
-5. **本機時間**：`today`/`now`/`nowTime` 值正確寫入；F12 Network 不再出現對 `location.href` 的 `HEAD` 請求。
-6. **無全域污染**：F12 Console 執行 `window.fetch.toString()` 應為原生 `[native code]`，非外掛包裝版。
-7. **回歸**：補償寫入、子表履歷、欄位條件、跨 App 寫入行為不變。
+---
+
+## 五、怎麼驗
+
+沒有自動化測試，就在裝了外掛的測試 App 上手動跑：
+
+1. **存檔成功**：建一條 create.submit 規則加設定好 Log App，新增記錄存檔，Log App 應該多一筆「成功」、訊息列出命中哪些規則。
+2. **存檔失敗**：故意讓規則出錯（例如目標欄位代碼打錯），存檔被擋下來，Log 出現「失敗」加分類。
+3. **簽核成功**：掛一條 proceed 規則，按流程按鈕，Log 出現「成功」。
+4. **簽核失敗**：規則出錯把簽核擋掉，Log 出現「失敗」。
+5. **本機時間**：`today` / `now` / `nowTime` 寫進去的值正確，F12 Network 不應該再看到對 `location.href` 的 `HEAD`。
+6. **沒污染全域**：F12 Console 打 `window.fetch.toString()`，應該是原生 `[native code]`，不是外掛包過的版本。
+7. **回歸**：補償寫入、子表履歷、欄位條件、跨 App 寫入這些行為要跟改之前一樣。
 
 ---
 
 ## 六、發佈
 
-1. 改 `desktop.js`，**完整覆蓋** `mobile.js`（兩者內容必須相同）。
-2. `manifest.json` 版本 → `1.5.0`。
-3. 更新 README：移除附錄 B-5（伺服器時間）、B-8b 之後關於網路攔截器（來源 B / 攔截器）的段落，改述方案 A 的 log 來源；其餘技術說明同步。
-4. 用既有 `.ppk` 重新打包（維持相同 plugin ID）：
+1. 改 `desktop.js`，改完整個蓋過去 `mobile.js`（兩個內容要一致）。
+2. `manifest.json` 版本進到 `1.5.0`。
+3. README 跟著更新：把附錄 B-5（伺服器時間）、還有 B-8b 後面講網路攔截器（來源 B）那幾段拿掉，改寫成方案 A 的 log 來源，其餘技術說明同步。
+4. 用原本那把 `.ppk` 重新打包，這樣 plugin ID 不變：
    ```
    npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
    ```
