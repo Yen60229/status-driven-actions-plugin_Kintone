@@ -93,9 +93,6 @@
   const SESSION_EXPIRED_MESSAGE = '登入已逾時，請開「新分頁」重新登入 kintone 後，回到本頁再執行一次（已填寫的內容不會消失）。';
   const PERMISSION_DENIED_MESSAGE = '您沒有執行此操作的權限，請聯繫系統管理員確認權限或 API Token 設定。';
 
-  const PERMISSION_CODES = new Set(['GAIA_NO01', 'GAIA_NO02', 'CB_NO01', 'CB_NO02', 'GAIA_DA02']);
-  const CONFIG_CODES = new Set(['GAIA_FE01', 'GAIA_AP01', 'GAIA_IQ11', 'GAIA_IL26', 'CB_IL02', 'CB_VA01']);
-
   const errorCodeOf = (err) => {
     if (err && err.code) return err.code;
     const msg = (err && err.message) || '';
@@ -106,11 +103,16 @@
   };
 
   const classifyError = (err) => {
-    const code = errorCodeOf(err);
-    if (code === 'CB_AU01') return 'session';
-    if (PERMISSION_CODES.has(code)) return 'permission';
-    if (CONFIG_CODES.has(code)) return 'config';
-    return 'system';
+    switch (errorCodeOf(err)) {
+      case 'CB_AU01':
+        return 'session';
+      case 'GAIA_NO01': case 'GAIA_NO02': case 'CB_NO01': case 'CB_NO02': case 'GAIA_DA02':
+        return 'permission';
+      case 'GAIA_FE01': case 'GAIA_AP01': case 'GAIA_IQ11': case 'GAIA_IL26': case 'CB_IL02': case 'CB_VA01':
+        return 'config';
+      default:
+        return 'system';
+    }
   };
 
   const friendlyError = (err, prefix) => {
@@ -158,20 +160,24 @@
       method,
       headers: { 'Content-Type': 'application/json', 'X-Cybozu-API-Token': token },
     };
-    if (method === 'GET') {
-      const qs = new URLSearchParams();
-      Object.entries(body || {}).forEach(([k, v]) => {
-        if (Array.isArray(v)) v.forEach((x) => qs.append(`${k}[]`, x));
-        else qs.append(k, v);
-      });
-      const r = await fetch(`${url}?${qs}`, opts);
-      if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
-      return r.json();
+    switch (method) {
+      case 'GET': {
+        const qs = new URLSearchParams();
+        Object.entries(body || {}).forEach(([k, v]) => {
+          if (Array.isArray(v)) v.forEach((x) => qs.append(`${k}[]`, x));
+          else qs.append(k, v);
+        });
+        const r = await fetch(`${url}?${qs}`, opts);
+        if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
+        return r.json();
+      }
+      default: {
+        opts.body = JSON.stringify(body);
+        const r = await fetch(url, opts);
+        if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
+        return r.json();
+      }
     }
-    opts.body = JSON.stringify(body);
-    const r = await fetch(url, opts);
-    if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
-    return r.json();
   };
 
   const LOG_FIELDS = {
@@ -298,8 +304,11 @@
               v = p.map[key];
             } else {
               const onMiss = p.onMiss === undefined ? 'raw' : p.onMiss;
-              if (onMiss === 'empty') return null;
-              if (onMiss !== 'raw')   v = onMiss;
+              switch (onMiss) {
+                case 'empty': return null;
+                case 'raw':   break;
+                default:      v = onMiss;
+              }
             }
           }
           return v;
@@ -320,9 +329,13 @@
         }
 
         let idx;
-        if (p.row === 'first') idx = 0;
-        else if (typeof p.row === 'number') idx = p.row < 0 ? rows.length + p.row : p.row;
-        else idx = rows.length - 1;
+        switch (p.row) {
+          case 'first': idx = 0; break;
+          default:
+            idx = typeof p.row === 'number'
+              ? (p.row < 0 ? rows.length + p.row : p.row)
+              : rows.length - 1;
+        }
         const targetRow = rows[idx];
         const cell = targetRow && targetRow.value && targetRow.value[p.field];
         const _raw0 = cell ? cell.value : '';
@@ -744,43 +757,46 @@
       }
     }
 
-    if (trigger === 'process.proceed') {
-      if (touchedFields.length > 0 && SELF_TOKEN) {
-        const recordId = record.$id && record.$id.value;
-        const canEdit = editCheckPromise ? await editCheckPromise : await checkEditPermission(recordId);
-        if (!canEdit) {
-          pendingWrite = {
-            recordId,
-            changedFields: snapshotFields(record, [...new Set(touchedFields)]),
-          };
-          for (const rule of otherRules) {
-            try { await runWriteOther(rule, ctx); }
-            catch (e) {
-              console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
-              if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
+    switch (trigger) {
+      case 'process.proceed': {
+        if (touchedFields.length > 0 && SELF_TOKEN) {
+          const recordId = record.$id && record.$id.value;
+          const canEdit = editCheckPromise ? await editCheckPromise : await checkEditPermission(recordId);
+          if (!canEdit) {
+            pendingWrite = {
+              recordId,
+              changedFields: snapshotFields(record, [...new Set(touchedFields)]),
+            };
+            for (const rule of otherRules) {
+              try { await runWriteOther(rule, ctx); }
+              catch (e) {
+                console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
+                if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
+              }
             }
+            return;
           }
-          return;
         }
-      }
 
-      for (const rule of otherRules) {
-        try { await runWriteOther(rule, ctx); }
-        catch (e) {
-          console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
-          if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
+        for (const rule of otherRules) {
+          try { await runWriteOther(rule, ctx); }
+          catch (e) {
+            console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
+            if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
+          }
         }
+        return event;
       }
-      return event;
-    }
-
-    if (/submit/.test(trigger)) {
-      for (const rule of otherRules) {
-        try { await runWriteOther(rule, ctx); }
-        catch (e) {
-          console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
-          if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
+      case 'create.submit':
+      case 'edit.submit': {
+        for (const rule of otherRules) {
+          try { await runWriteOther(rule, ctx); }
+          catch (e) {
+            console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
+            if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
+          }
         }
+        break;
       }
     }
 
@@ -846,7 +862,12 @@
 
   const loggedApply = (trigger) => async (ev) => {
     _runInfo = { matched: 0, labels: [] };
-    if (/submit/.test(trigger)) _pendingSubmitLog = null;
+    switch (trigger) {
+      case 'create.submit':
+      case 'edit.submit':
+        _pendingSubmitLog = null;
+        break;
+    }
 
     let out;
     let thrown = null;
@@ -881,17 +902,21 @@
     //   proceed → 樂觀記錄（kintone 無 process.proceed.success 事件可掛）。
     //   submit  → 暫存，待 *.submit.success 確認存檔成功後再寫（見 flushSubmitLog）。
     if (!errored && _runInfo.matched > 0) {
-      if (trigger === 'process.proceed') {
-        try {
-          await writeLog({
-            ev, trigger, result: '成功', category: 'success',
-            message: successLogMessage(_runInfo.matched, _runInfo.labels),
-          });
-        } catch (e) {
-          console.error('[sda] writeLog failed', e);
-        }
-      } else if (/submit/.test(trigger)) {
-        _pendingSubmitLog = { trigger, matched: _runInfo.matched, labels: _runInfo.labels.slice() };
+      switch (trigger) {
+        case 'process.proceed':
+          try {
+            await writeLog({
+              ev, trigger, result: '成功', category: 'success',
+              message: successLogMessage(_runInfo.matched, _runInfo.labels),
+            });
+          } catch (e) {
+            console.error('[sda] writeLog failed', e);
+          }
+          break;
+        case 'create.submit':
+        case 'edit.submit':
+          _pendingSubmitLog = { trigger, matched: _runInfo.matched, labels: _runInfo.labels.slice() };
+          break;
       }
     }
     return out;
