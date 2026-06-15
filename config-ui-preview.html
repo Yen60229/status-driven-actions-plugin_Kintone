@@ -1,0 +1,770 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Status-Driven Actions Plugin — 設定頁預覽 v2</title>
+<style>
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+body {
+  font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  font-size: 13px; background: #f0f2f2; color: #333; min-height: 100vh;
+}
+
+.preview-banner {
+  background: #2c3e50; color: #ecf0f1; text-align: center;
+  padding: 8px 16px; font-size: 12px; letter-spacing: .04em;
+  position: sticky; top: 0; z-index: 100;
+}
+.preview-banner span { color: #f39c12; font-weight: 600; }
+
+.page-wrapper { max-width: 900px; margin: 0 auto; padding: 24px 20px 60px; }
+
+/* ── Section ── */
+.sda-section {
+  background: #fafafa; border: 1px solid #e3e7e8;
+  border-radius: 4px; padding: 16px; margin-bottom: 24px;
+}
+.sda-section-title { font-size: 15px; font-weight: 700; color: #333; margin-bottom: 10px; }
+.sda-section-help  { font-size: 12px; color: #888; margin-bottom: 12px; line-height: 1.6; }
+
+/* ── Token table ── */
+.sda-table { width: 100%; border-collapse: collapse; background: #fff; }
+.sda-table th, .sda-table td {
+  border: 1px solid #e3e7e8; padding: 6px 8px; font-size: 13px; vertical-align: middle;
+}
+.sda-table th { background: #f4f6f7; font-weight: 600; text-align: left; }
+.sda-table input[type=text] {
+  width: 100%; border: 1px solid #d4d7d7; border-radius: 3px; padding: 4px 6px; font-size: 13px;
+}
+
+/* ── Buttons ── */
+.sda-btn {
+  padding: 5px 12px; font-size: 12px; border-radius: 3px;
+  cursor: pointer; border: 1px solid #d4d7d7; background: #fff; transition: background .12s;
+}
+.sda-btn:hover { background: #f4f6f7; }
+.sda-btn-primary {
+  background: #3498db; color: #fff; border-color: #2980b9;
+  padding: 7px 20px; font-size: 13px;
+}
+.sda-btn-primary:hover { background: #2980b9; }
+.sda-btn-add  { color: #2471a3; border-color: #aed6f1; }
+.sda-btn-add:hover  { background: #eaf4fb; }
+.sda-btn-del  { color: #c0392b; border: none; background: transparent; padding: 3px 8px; }
+.sda-btn-del:hover  { background: #fdf0ef; border-radius: 3px; }
+.sda-btn-copy { color: #2471a3; border: none; background: transparent; padding: 3px 8px; }
+.sda-btn-copy:hover { background: #eaf4fb; border-radius: 3px; }
+.sda-btn-move { color: #666; border: none; background: transparent; padding: 3px 7px; }
+.sda-btn-move:hover { background: #f4f6f7; border-radius: 3px; }
+
+/* ── Rule Card ── */
+.rules-list { display: flex; flex-direction: column; gap: 12px; }
+
+.sda-rule-card {
+  background: #fff; border: 1px solid #d4d7d7; border-radius: 5px;
+  overflow: visible; transition: box-shadow .15s;
+}
+.sda-rule-card:hover { box-shadow: 0 2px 10px rgba(0,0,0,.08); }
+.sda-rule-card.disabled { opacity: .55; }
+
+@keyframes slideIn {
+  from { opacity: 0; transform: translateY(-8px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.sda-rule-card.new { animation: slideIn .22s ease-out; }
+
+.rule-header {
+  background: #f7f8f9; border-bottom: 1px solid #e3e7e8;
+  padding: 8px 10px; display: flex; align-items: center; gap: 6px;
+}
+.rule-header-label { flex: 1; min-width: 0; }
+.rule-header-label input[type=text] {
+  width: 100%; border: 1px solid transparent; border-radius: 3px;
+  padding: 3px 6px; font-size: 13px; background: transparent; font-weight: 600; color: #2c3e50;
+}
+.rule-header-label input[type=text]:hover { border-color: #d4d7d7; background: #fff; }
+.rule-header-label input[type=text]:focus { border-color: #3498db; background: #fff; outline: none; }
+
+.rule-body { padding: 12px 14px 14px; }
+
+/* ── Rule Grid ── */
+.rule-grid {
+  display: grid; grid-template-columns: 148px 1fr;
+  gap: 7px 10px; align-items: start;
+}
+.rule-grid-label {
+  font-size: 12px; color: #666; text-align: right;
+  padding-right: 4px; padding-top: 6px; white-space: nowrap;
+}
+.rule-grid-ctrl { min-width: 0; }
+.rule-grid-ctrl input[type=text],
+.rule-grid-ctrl select {
+  width: 100%; border: 1px solid #d4d7d7; border-radius: 3px;
+  padding: 4px 8px; font-size: 13px; background: #fff;
+}
+.rule-grid-ctrl input[type=text]:focus,
+.rule-grid-ctrl select:focus {
+  outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,.15);
+}
+.rule-grid-ctrl textarea {
+  width: 100%; border: 1px solid #d4d7d7; border-radius: 3px;
+  padding: 4px 8px; font-size: 12px; font-family: monospace;
+  min-height: 52px; resize: vertical; background: #fff;
+}
+.rule-grid-ctrl textarea:focus {
+  outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,.15);
+}
+
+.sda-check-label {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: #555; cursor: pointer; user-select: none;
+  padding-top: 4px;
+}
+.sda-check-label input { cursor: pointer; }
+
+/* ── 欄位條件 ── */
+.cond-section {
+  margin-top: 12px;
+  border-top: 1px dashed #e0e3e4;
+  padding-top: 10px;
+}
+.cond-header {
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.cond-header-title { font-size: 12px; font-weight: 600; color: #555; }
+
+/* AND / OR 切換 */
+.logic-toggle { display: inline-flex; border: 1px solid #d4d7d7; border-radius: 3px; overflow: hidden; }
+.logic-btn {
+  padding: 3px 10px; font-size: 11px; font-weight: 700;
+  cursor: pointer; border: none; background: #fff; color: #888;
+  transition: background .1s, color .1s; letter-spacing: .03em;
+}
+.logic-btn.active-and { background: #2471a3; color: #fff; }
+.logic-btn.active-or  { background: #8e44ad; color: #fff; }
+.logic-btn:not([class*=active]):hover { background: #f4f6f7; }
+
+.cond-add-btn {
+  font-size: 11px; color: #2471a3; border: 1px dashed #aed6f1;
+  background: transparent; border-radius: 3px; padding: 3px 9px; cursor: pointer;
+}
+.cond-add-btn:hover { background: #eaf4fb; }
+
+.cond-empty { font-size: 12px; color: #aaa; padding: 4px 0; }
+
+.cond-list { display: flex; flex-direction: column; gap: 5px; }
+
+.cond-row {
+  display: grid; grid-template-columns: 1fr 100px 1fr auto;
+  gap: 5px; align-items: center;
+}
+.cond-logic-sep {
+  text-align: center; font-size: 11px; font-weight: 700;
+  padding: 2px 0;
+}
+.cond-logic-sep.sep-and { color: #2471a3; }
+.cond-logic-sep.sep-or  { color: #8e44ad; }
+
+.cond-row select, .cond-row input[type=text] {
+  width: 100%; border: 1px solid #d4d7d7; border-radius: 3px;
+  padding: 4px 6px; font-size: 12px; background: #fff;
+}
+.cond-row select:focus, .cond-row input[type=text]:focus {
+  outline: none; border-color: #3498db;
+}
+
+/* ── 可搜尋下拉 ── */
+.ss-wrap { position: relative; }
+.ss-input {
+  width: 100%; padding: 4px 26px 4px 8px; font-size: 13px;
+  border: 1px solid #d4d7d7; border-radius: 3px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23999'/%3E%3C/svg%3E") no-repeat right 8px center;
+  cursor: pointer; transition: border-color .12s, box-shadow .12s;
+}
+.ss-input:focus {
+  outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,.18); cursor: text;
+}
+.ss-list {
+  display: none; position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 9999;
+  max-height: 230px; overflow-y: auto; background: #fff;
+  border: 1px solid #aec6d4; border-radius: 4px; box-shadow: 0 6px 18px rgba(0,0,0,.13);
+}
+.ss-list.open { display: block; }
+.ss-item {
+  padding: 7px 10px; font-size: 13px; cursor: pointer;
+  white-space: nowrap; line-height: 1.4; transition: background .08s;
+}
+.ss-item:hover  { background: #eaf4fb; }
+.ss-item.active { background: #d6eaf8; font-weight: 600; }
+.ss-badge {
+  font-size: 10px; color: #888; background: #f0f2f2;
+  border-radius: 2px; padding: 1px 4px; margin-left: 5px; vertical-align: middle;
+}
+.ss-empty { padding: 8px 10px; font-size: 12px; color: #aaa; }
+.ss-match { background: #fef3cd; border-radius: 1px; }
+
+/* ── cond ss (小尺寸) ── */
+.ss-input.sm { font-size: 12px; padding: 4px 22px 4px 6px; }
+
+/* ── Toolbar ── */
+.sda-toolbar {
+  display: flex; justify-content: flex-end; align-items: center; gap: 8px;
+  margin-top: 20px; padding-top: 16px; border-top: 1px solid #e3e7e8;
+}
+.sda-msg { font-size: 12px; margin-right: auto; }
+.sda-msg.success { color: #27ae60; }
+.sda-msg.error   { color: #c0392b; }
+</style>
+</head>
+<body>
+
+<div class="preview-banner">
+  📐 UI 改善預覽 v2 — <span>確認後才打包</span>｜新增：時間轉換顯示、欄位條件 AND / OR
+</div>
+
+<div class="page-wrapper">
+
+  <!-- SECTION 1 -->
+  <div class="sda-section">
+    <div class="sda-section-title">1. API Token 設定</div>
+    <div class="sda-section-help">
+      【本 App API Token】流程推進後若使用者在新狀態沒有編輯權限，外掛會用此 Token 補償寫入。
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;">
+      <span style="white-space:nowrap;color:#555;">本 App Token：</span>
+      <input type="text" placeholder="本 App 的 API Token"
+        style="flex:1;border:1px solid #d4d7d7;border-radius:3px;padding:5px 8px;font-size:13px;">
+    </div>
+    <table class="sda-table">
+      <thead><tr>
+        <th style="width:90px">App ID</th>
+        <th style="width:130px">顯示名稱</th>
+        <th>API Token</th>
+        <th style="width:48px"></th>
+      </tr></thead>
+      <tbody><tr>
+        <td><input type="text" value="123"></td>
+        <td><input type="text" value="人力需求表"></td>
+        <td><input type="text" value="xxxxxxxxxxxxxxxxxxxx"></td>
+        <td style="text-align:center"><button class="sda-btn sda-btn-del">✕</button></td>
+      </tr></tbody>
+    </table>
+    <button class="sda-btn sda-btn-add" style="margin-top:8px">+ 新增 Token</button>
+  </div>
+
+  <!-- SECTION 2 -->
+  <div class="sda-section">
+    <div class="sda-section-title">2. 規則列表</div>
+    <div class="sda-section-help">
+      規則由上而下依序執行。「寫入其他 App」只在 submit / process.proceed 時機觸發。
+    </div>
+    <div class="rules-list" id="rulesList"></div>
+    <button class="sda-btn sda-btn-add" onclick="addRule()" style="margin-top:12px">+ 新增規則</button>
+  </div>
+
+  <div class="sda-toolbar">
+    <span class="sda-msg" id="statusMsg"></span>
+    <button class="sda-btn" onclick="showMsg('已取消，設定未變更','')">取消</button>
+    <button class="sda-btn sda-btn-primary" onclick="handleSave()">儲存</button>
+  </div>
+
+</div>
+
+<script>
+/* ================================================================
+   ① 現在日期時間：動態顯示本機時間（轉換後）
+================================================================ */
+function fmtLocalNow() {
+  const d = new Date();
+  const pad = n => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())} `
+       + `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
+}
+
+/* ================================================================
+   選項資料
+================================================================ */
+const FIELD_OPTIONS = [
+  { v: '',                l: '— 請選擇欄位 —',                badge: '' },
+  { v: 'check_box_field', l: '屬於清單（check_box_field）',  badge: 'CHECK_BOX' },
+  { v: 'month_field',     l: '月份（month_field）',            badge: 'DROP_DOWN' },
+  { v: 'apply_date',      l: '申請日期（apply_date）',         badge: 'DATE' },
+  { v: 'applicant',       l: '申請人（applicant）',             badge: 'USER_SELECT' },
+  { v: 'status_field',    l: '審核狀態（status_field）',        badge: 'DROP_DOWN' },
+  { v: 'notes',           l: '備註（notes）',                   badge: 'MULTI_LINE_TEXT' },
+  { v: 'history_table',   l: '流程履歷（history_table）',       badge: 'SUBTABLE' },
+];
+
+const VALUE_SOURCES = [
+  { v: 'fixed',           l: '固定值' },
+  { v: 'loginUser',       l: '登入者' },
+  { v: 'today',           l: '今天日期（例：' + new Date().toISOString().slice(0,10) + '）' },
+  { v: 'nowTime',         l: '現在時刻（例：' + fmtLocalNow().slice(11,16) + '）' },
+  // ① 轉換成本機時間格式顯示
+  { v: 'now',             l: '現在日期時間（例：' + fmtLocalNow() + '）' },
+  { v: 'recordNumber',    l: '記錄編號' },
+  { v: 'recordId',        l: '記錄 $id' },
+  { v: 'appId',           l: 'App ID' },
+  { v: 'uuid',            l: 'UUID（隨機）' },
+  { v: 'timestamp',       l: 'Unix 時間戳' },
+  { v: 'fieldCopy',       l: '從本記錄欄位複製 [參數: 來源欄位代碼]' },
+  { v: 'formula',         l: '簡易計算式 [參數: 例 {qty}*{price}]' },
+  { v: 'lookup',          l: '跨 App 查詢 [參數: JSON]' },
+  { v: 'nextStatus',      l: '下一狀態 (process.proceed)' },
+  { v: 'currentStatus',   l: '當前狀態' },
+  { v: 'actionName',      l: '流程動作名稱' },
+  { v: 'clear',           l: '清空' },
+  { v: 'readonly',        l: '唯讀鎖定（限 *.show）' },
+  { v: 'appendSubtable',  l: 'Append 子表一筆 [參數: JSON]' },
+  { v: 'subtableLastRow', l: '子表某列欄位值（預設最後一列）[參數: JSON]' },
+];
+
+const COND_OPS = [
+  { v: 'eq',         l: '等於' },
+  { v: 'neq',        l: '不等於' },
+  { v: 'contains',   l: '包含' },
+  { v: 'startsWith', l: '開頭為' },
+];
+
+/* ================================================================
+   初始規則資料
+================================================================ */
+let rules = [
+  {
+    id: 'r1', enabled: true,
+    label: '到流程結束 → 勾選月份',
+    trigger: 'process.proceed',
+    fromStatus: '*', toStatus: '流程結束', actionName: '*',
+    action: 'writeSelf',
+    targetField: 'check_box_field',
+    valueSource: 'subtableLastRow',
+    valueParam: '{ "table": "history_table", "field": "month_field" }',
+    skipIfFilled: false, appendMode: true,
+    conditions: [
+      { field: 'status_field', op: 'eq', value: '審核中' }
+    ],
+    conditionLogic: 'AND',
+  },
+  {
+    id: 'r2', enabled: true,
+    label: '新增時隱藏履歷',
+    trigger: 'create.show',
+    fromStatus: '', toStatus: '', actionName: '',
+    action: 'writeSelf',
+    targetField: 'history_table',
+    valueSource: 'readonly',
+    valueParam: '',
+    skipIfFilled: false, appendMode: false,
+    conditions: [],
+    conditionLogic: 'AND',
+  },
+];
+
+/* ================================================================
+   可搜尋下拉
+================================================================ */
+function createSS(options, curVal, onChange, hasBadge = false, small = false) {
+  const wrap = document.createElement('div');
+  wrap.className = 'ss-wrap';
+
+  let _val = curVal;
+  const findLabel = v => { const o = options.find(x => x.v === v); return o ? o.l : (v || ''); };
+
+  const inp = document.createElement('input');
+  inp.type = 'text';
+  inp.className = 'ss-input' + (small ? ' sm' : '');
+  inp.autocomplete = 'off';
+  inp.spellcheck = false;
+  inp.value = findLabel(_val);
+
+  const list = document.createElement('div');
+  list.className = 'ss-list';
+
+  function hl(text, kw) {
+    if (!kw) return document.createTextNode(text);
+    const i = text.toLowerCase().indexOf(kw.toLowerCase());
+    if (i < 0) return document.createTextNode(text);
+    const f = document.createDocumentFragment();
+    f.appendChild(document.createTextNode(text.slice(0, i)));
+    const m = document.createElement('span'); m.className = 'ss-match'; m.textContent = text.slice(i, i+kw.length);
+    f.appendChild(m);
+    f.appendChild(document.createTextNode(text.slice(i+kw.length)));
+    return f;
+  }
+
+  function buildList(filter) {
+    list.innerHTML = '';
+    const lf = (filter||'').toLowerCase();
+    const shown = lf ? options.filter(o => o.l.toLowerCase().includes(lf)||o.v.toLowerCase().includes(lf)) : options;
+    if (!shown.length) {
+      const e = document.createElement('div'); e.className = 'ss-empty'; e.textContent = '無符合選項';
+      list.appendChild(e);
+    } else {
+      shown.forEach(o => {
+        const item = document.createElement('div');
+        item.className = 'ss-item' + (o.v === _val ? ' active' : '');
+        item.title = o.l;
+        item.appendChild(hl(o.l, filter));
+        if (hasBadge && o.badge) {
+          const b = document.createElement('span'); b.className = 'ss-badge'; b.textContent = o.badge;
+          item.appendChild(b);
+        }
+        item.addEventListener('mousedown', e => {
+          e.preventDefault();
+          _val = o.v; inp.value = o.l; list.classList.remove('open'); onChange(o.v);
+        });
+        list.appendChild(item);
+      });
+    }
+    list.classList.add('open');
+  }
+
+  inp.addEventListener('focus',  () => { inp.select(); buildList(''); });
+  inp.addEventListener('input',  () => buildList(inp.value));
+  inp.addEventListener('blur',   () => setTimeout(() => { list.classList.remove('open'); inp.value = findLabel(_val); }, 180));
+
+  wrap.appendChild(inp);
+  wrap.appendChild(list);
+  return wrap;
+}
+
+/* ================================================================
+   欄位條件區塊
+================================================================ */
+function makeCondSection(rule) {
+  const sec = document.createElement('div');
+  sec.className = 'cond-section';
+
+  /* header */
+  const hdr = document.createElement('div');
+  hdr.className = 'cond-header';
+
+  const title = document.createElement('span');
+  title.className = 'cond-header-title';
+  title.textContent = '欄位條件';
+  hdr.appendChild(title);
+
+  /* AND / OR 切換 */
+  const toggle = document.createElement('div');
+  toggle.className = 'logic-toggle';
+
+  const btnAnd = document.createElement('button');
+  btnAnd.className = 'logic-btn' + (rule.conditionLogic !== 'OR' ? ' active-and' : '');
+  btnAnd.textContent = 'AND';
+
+  const btnOr = document.createElement('button');
+  btnOr.className = 'logic-btn' + (rule.conditionLogic === 'OR' ? ' active-or' : '');
+  btnOr.textContent = 'OR';
+
+  btnAnd.addEventListener('click', () => {
+    rule.conditionLogic = 'AND';
+    btnAnd.className = 'logic-btn active-and';
+    btnOr.className  = 'logic-btn';
+    renderCondList();
+  });
+  btnOr.addEventListener('click', () => {
+    rule.conditionLogic = 'OR';
+    btnAnd.className = 'logic-btn';
+    btnOr.className  = 'logic-btn active-or';
+    renderCondList();
+  });
+
+  toggle.appendChild(btnAnd);
+  toggle.appendChild(btnOr);
+  hdr.appendChild(toggle);
+
+  /* 說明小字 */
+  const hint = document.createElement('span');
+  hint.style.cssText = 'font-size:11px;color:#aaa;margin-left:4px;';
+  hint.textContent = '所有條件都滿足才觸發規則';
+  hdr.appendChild(hint);
+
+  // 同步說明文字
+  function updateHint() {
+    hint.textContent = rule.conditionLogic === 'OR'
+      ? '任一條件滿足即觸發規則'
+      : '所有條件都滿足才觸發規則';
+  }
+  btnAnd.addEventListener('click', updateHint);
+  btnOr.addEventListener('click',  updateHint);
+
+  /* 新增條件按鈕 */
+  const addBtn = document.createElement('button');
+  addBtn.className = 'cond-add-btn';
+  addBtn.textContent = '+ 新增條件';
+  addBtn.addEventListener('click', () => {
+    rule.conditions.push({ field: '', op: 'eq', value: '' });
+    renderCondList();
+  });
+  hdr.appendChild(addBtn);
+
+  sec.appendChild(hdr);
+
+  /* 條件列表 */
+  const listEl = document.createElement('div');
+  sec.appendChild(listEl);
+
+  function renderCondList() {
+    listEl.innerHTML = '';
+    if (!rule.conditions.length) {
+      const e = document.createElement('div');
+      e.className = 'cond-empty';
+      e.textContent = '（無條件，規則只依觸發時機與狀態判斷）';
+      listEl.appendChild(e);
+      return;
+    }
+
+    const cl = document.createElement('div');
+    cl.className = 'cond-list';
+
+    rule.conditions.forEach((cond, i) => {
+      /* 分隔符（AND / OR 標籤，第一列之後才顯示） */
+      if (i > 0) {
+        const sep = document.createElement('div');
+        sep.className = 'cond-logic-sep ' + (rule.conditionLogic === 'OR' ? 'sep-or' : 'sep-and');
+        sep.textContent = rule.conditionLogic === 'OR' ? 'OR' : 'AND';
+        cl.appendChild(sep);
+      }
+
+      const row = document.createElement('div');
+      row.className = 'cond-row';
+
+      /* 欄位 (可搜尋，小尺寸) */
+      const fieldOpts = [{ v: '', l: '— 選擇欄位 —', badge: '' }, ...FIELD_OPTIONS.slice(1)];
+      const fieldSS = createSS(fieldOpts, cond.field, v => { cond.field = v; }, true, true);
+      row.appendChild(fieldSS);
+
+      /* 運算子 */
+      const opSel = document.createElement('select');
+      COND_OPS.forEach(o => {
+        const opt = document.createElement('option');
+        opt.value = o.v; opt.textContent = o.l;
+        if (o.v === cond.op) opt.selected = true;
+        opSel.appendChild(opt);
+      });
+      opSel.addEventListener('change', () => cond.op = opSel.value);
+      row.appendChild(opSel);
+
+      /* 值 */
+      const valInp = document.createElement('input');
+      valInp.type = 'text';
+      valInp.value = cond.value;
+      valInp.placeholder = '比較值';
+      valInp.addEventListener('input', () => cond.value = valInp.value);
+      row.appendChild(valInp);
+
+      /* 刪除 */
+      const delBtn = document.createElement('button');
+      delBtn.className = 'sda-btn-del';
+      delBtn.textContent = '✕';
+      delBtn.style.cssText = 'border:none;background:transparent;cursor:pointer;font-size:13px;color:#c0392b;padding:0 4px;';
+      delBtn.addEventListener('click', () => {
+        rule.conditions.splice(i, 1);
+        renderCondList();
+      });
+      row.appendChild(delBtn);
+
+      cl.appendChild(row);
+    });
+
+    listEl.appendChild(cl);
+  }
+
+  renderCondList();
+  return sec;
+}
+
+/* ================================================================
+   渲染規則卡片
+================================================================ */
+function makeRuleCard(rule, isNew = false) {
+  const card = document.createElement('div');
+  card.className = 'sda-rule-card' + (isNew ? ' new' : '') + (!rule.enabled ? ' disabled' : '');
+  card.dataset.id = rule.id;
+
+  /* header */
+  const header = document.createElement('div');
+  header.className = 'rule-header';
+
+  const cbWrap = document.createElement('label');
+  cbWrap.className = 'sda-check-label';
+  const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = rule.enabled !== false;
+  cb.addEventListener('change', () => { rule.enabled = cb.checked; card.classList.toggle('disabled', !rule.enabled); });
+  cbWrap.appendChild(cb); cbWrap.appendChild(document.createTextNode(' 啟用'));
+  header.appendChild(cbWrap);
+
+  const labelWrap = document.createElement('div');
+  labelWrap.className = 'rule-header-label';
+  const labelInp = document.createElement('input');
+  labelInp.type = 'text'; labelInp.value = rule.label; labelInp.placeholder = '規則顯示名稱（選填）';
+  labelInp.addEventListener('input', () => rule.label = labelInp.value);
+  labelWrap.appendChild(labelInp);
+  header.appendChild(labelWrap);
+
+  const btnDel = document.createElement('button');
+  btnDel.className = 'sda-btn sda-btn-del'; btnDel.textContent = '刪除';
+  btnDel.addEventListener('click', () => {
+    card.style.transition = 'opacity .18s,transform .18s';
+    card.style.opacity = '0'; card.style.transform = 'translateY(-6px)';
+    setTimeout(() => { rules = rules.filter(r => r.id !== rule.id); card.remove(); }, 180);
+  });
+  header.appendChild(btnDel);
+
+  const btnCopy = document.createElement('button');
+  btnCopy.className = 'sda-btn sda-btn-copy'; btnCopy.textContent = '複製';
+  btnCopy.title = '複製此規則，插入在下方';
+  btnCopy.addEventListener('click', () => {
+    const copy = JSON.parse(JSON.stringify(rule));
+    copy.id = 'r-' + Date.now();
+    copy.label = (rule.label || '規則') + '（複製）';
+    const idx = rules.findIndex(r => r.id === rule.id);
+    rules.splice(idx+1, 0, copy);
+    const newCard = makeRuleCard(copy, true);
+    card.insertAdjacentElement('afterend', newCard);
+    showMsg('已複製「' + rule.label + '」', 'success');
+  });
+  header.appendChild(btnCopy);
+
+  ['↑','↓'].forEach((arrow, di) => {
+    const b = document.createElement('button');
+    b.className = 'sda-btn sda-btn-move'; b.textContent = arrow;
+    b.addEventListener('click', () => {
+      const idx = rules.findIndex(r => r.id === rule.id);
+      const target = idx + (di === 0 ? -1 : 1);
+      if (target < 0 || target >= rules.length) return;
+      [rules[target], rules[idx]] = [rules[idx], rules[target]];
+      const sibling = di === 0 ? card.previousElementSibling : card.nextElementSibling;
+      if (sibling) di === 0 ? card.parentNode.insertBefore(card, sibling) : card.parentNode.insertBefore(sibling, card);
+    });
+    header.appendChild(b);
+  });
+
+  card.appendChild(header);
+
+  /* body */
+  const body = document.createElement('div');
+  body.className = 'rule-body';
+
+  const grid = document.createElement('div');
+  grid.className = 'rule-grid';
+
+  const addRow = (lbl, ctrl) => {
+    const l = document.createElement('div'); l.className = 'rule-grid-label'; l.textContent = lbl; grid.appendChild(l);
+    const c = document.createElement('div'); c.className = 'rule-grid-ctrl'; c.appendChild(ctrl); grid.appendChild(c);
+  };
+  const addFullRow = ctrl => {
+    const s = document.createElement('div'); s.className = 'rule-grid-label'; grid.appendChild(s);
+    const c = document.createElement('div'); c.className = 'rule-grid-ctrl'; c.appendChild(ctrl); grid.appendChild(c);
+  };
+  const makeInput = (val, onCh, ph='') => {
+    const i = document.createElement('input'); i.type='text'; i.value=val; i.placeholder=ph;
+    i.addEventListener('input', () => onCh(i.value)); return i;
+  };
+  const makeSelect = (opts, val, onCh) => {
+    const s = document.createElement('select');
+    opts.forEach(([v,l]) => {
+      const o = document.createElement('option'); o.value=v; o.textContent=l;
+      if (v===val) o.selected=true; s.appendChild(o);
+    });
+    s.addEventListener('change', () => onCh(s.value)); return s;
+  };
+
+  addRow('觸發時機', makeSelect([
+    ['process.proceed','流程推進時 (process.proceed)'],
+    ['create.show',    '新增畫面載入時 (create.show)'],
+    ['edit.show',      '編輯畫面載入時 (edit.show)'],
+    ['create.submit',  '新增儲存前 (create.submit)'],
+    ['edit.submit',    '編輯儲存前 (edit.submit)'],
+  ], rule.trigger, v => { rule.trigger = v; renderAll(); }));
+
+  if (rule.trigger === 'process.proceed') {
+    addRow('從狀態 (fromStatus)', makeInput(rule.fromStatus, v => rule.fromStatus=v, '* 表示任意'));
+    addRow('到狀態 (toStatus)',   makeInput(rule.toStatus,   v => rule.toStatus=v,   '* 表示任意'));
+    addRow('動作名稱',             makeInput(rule.actionName, v => rule.actionName=v, '* 表示任意'));
+  } else if (rule.trigger === 'edit.show' || rule.trigger === 'edit.submit') {
+    addRow('當狀態 =', makeInput(rule.statusCond||'', v => rule.statusCond=v, '* 表示任意'));
+  }
+
+  addRow('動作', makeSelect([
+    ['writeSelf',  '寫入本記錄欄位'],
+    ['writeOther', '寫入其他 App 記錄'],
+  ], rule.action, v => { rule.action=v; renderAll(); }));
+
+  if (rule.action === 'writeSelf') {
+    addRow('目標欄位', createSS(FIELD_OPTIONS, rule.targetField, v => rule.targetField=v, true));
+    addRow('值的來源', createSS(VALUE_SOURCES, rule.valueSource, v => { rule.valueSource=v; renderAll(); }));
+
+    const needsParam = ['fixed','fieldCopy','formula','lookup','appendSubtable','subtableLastRow'].includes(rule.valueSource);
+    if (needsParam) {
+      const phMap = {
+        fixed:          '填入文字；多值用逗號分隔（例：3月,6月）',
+        fieldCopy:      '來源欄位代碼（例：month_field）',
+        formula:        '例：{qty}*{price}+10',
+        lookup:         '{ "app": "456", "keyField": "代碼", "keyExpr": "{客戶代碼}", "returnField": "電話" }',
+        appendSubtable: '{ "subRules": [{ "targetField": "履歷_狀態", "valueSource": "nextStatus" }] }',
+        subtableLastRow:'{ "table": "子表代碼", "field": "欄位代碼" }',
+      };
+      const ta = document.createElement('textarea');
+      ta.value = typeof rule.valueParam==='string' ? rule.valueParam : JSON.stringify(rule.valueParam||'',null,2);
+      ta.placeholder = phMap[rule.valueSource]||'';
+      ta.addEventListener('input', () => rule.valueParam=ta.value);
+      addRow('值的參數', ta);
+    }
+
+    const mkCbRow = (checked, onCh, txt) => {
+      const lbl = document.createElement('label'); lbl.className = 'sda-check-label';
+      const c = document.createElement('input'); c.type='checkbox'; c.checked=checked;
+      c.addEventListener('change', () => onCh(c.checked));
+      lbl.appendChild(c); lbl.appendChild(document.createTextNode(' '+txt)); return lbl;
+    };
+    addFullRow(mkCbRow(!!rule.skipIfFilled, v => rule.skipIfFilled=v, '僅在目標欄位空白時才寫入'));
+    addFullRow(mkCbRow(!!rule.appendMode,   v => rule.appendMode=v,   '追加模式（CHECK_BOX：保留原有勾選再加上新值）'));
+  }
+
+  body.appendChild(grid);
+
+  /* ② 欄位條件區塊 */
+  body.appendChild(makeCondSection(rule));
+
+  card.appendChild(body);
+  return card;
+}
+
+/* ================================================================
+   全部重新渲染
+================================================================ */
+function renderAll() {
+  const list = document.getElementById('rulesList');
+  list.innerHTML = '';
+  rules.forEach(r => list.appendChild(makeRuleCard(r)));
+}
+
+function addRule() {
+  const r = {
+    id: 'r-'+Date.now(), enabled: true, label: '',
+    trigger: 'process.proceed',
+    fromStatus: '*', toStatus: '*', actionName: '*',
+    action: 'writeSelf',
+    targetField: '', valueSource: 'fixed', valueParam: '',
+    skipIfFilled: false, appendMode: false,
+    conditions: [], conditionLogic: 'AND',
+  };
+  rules.push(r);
+  const list = document.getElementById('rulesList');
+  const card = makeRuleCard(r, true);
+  list.appendChild(card);
+  card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function handleSave() { showMsg('✓ 設定已儲存（預覽模式，實際未寫入）','success'); }
+function showMsg(txt, type) {
+  const el = document.getElementById('statusMsg');
+  el.textContent = txt; el.className = 'sda-msg '+(type||'');
+  setTimeout(() => { el.textContent=''; el.className='sda-msg'; }, 3500);
+}
+
+renderAll();
+</script>
+</body>
+</html>

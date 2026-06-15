@@ -1,0 +1,20 @@
+# === 機密：kintone 外掛簽章私鑰，絕對不可上傳 ===
+# 此檔用於重新打包「相同 plugin ID」的外掛，請另外安全備份，切勿進版控。
+*.ppk
+
+# === 建置產物（可由 contents/ 重新打包，不需進版控）===
+plugin.zip
+plugin*.zip
+*.zip
+*.bak
+
+# === 相依套件 ===
+node_modules/
+
+# === Claude Code 本機設定（機器專屬，不進版控）===
+.claude/settings.local.json
+
+# === 系統 / 編輯器 ===
+.DS_Store
+Thumbs.db
+*.log

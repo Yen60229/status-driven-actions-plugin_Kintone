@@ -1,0 +1,74 @@
+/* Status-Driven Actions Plugin - Config UI */
+#ui-section { font-family: -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif; padding: 16px; }
+
+.sda-loading { color: #888; padding: 40px; text-align: center; }
+
+.sda-section { margin-bottom: 28px; padding: 16px; background: #fafafa; border: 1px solid #e3e7e8; border-radius: 4px; }
+.sda-section-title { font-size: 16px; font-weight: bold; margin: 0 0 12px; color: #333; }
+.sda-section-help { font-size: 12px; color: #888; margin: 0 0 12px; }
+
+.sda-table { width: 100%; border-collapse: collapse; background: #fff; }
+.sda-table th, .sda-table td { border: 1px solid #e3e7e8; padding: 6px 8px; font-size: 13px; vertical-align: top; }
+.sda-table th { background: #f4f6f7; font-weight: 600; text-align: left; }
+.sda-table input[type=text], .sda-table input[type=number], .sda-table select, .sda-table textarea {
+  width: 100%; box-sizing: border-box; padding: 4px 6px; font-size: 13px;
+  border: 1px solid #d4d7d7; border-radius: 3px;
+}
+.sda-table textarea { font-family: monospace; resize: vertical; min-height: 28px; }
+
+.sda-btn { padding: 6px 14px; font-size: 13px; border-radius: 3px; cursor: pointer; border: 1px solid #d4d7d7; background: #fff; }
+.sda-btn:hover { background: #f4f6f7; }
+.sda-btn-primary { background: #3498db; color: #fff; border-color: #3498db; }
+.sda-btn-primary:hover { background: #2980b9; }
+.sda-btn-danger { color: #c0392b; }
+.sda-btn-add { margin-top: 8px; }
+.sda-btn-row { color: #c0392b; padding: 2px 8px; border: none; background: transparent; cursor: pointer; }
+
+.sda-toolbar { margin-top: 24px; text-align: right; }
+.sda-toolbar .sda-btn { margin-left: 8px; }
+
+.sda-cond-cell { display: flex; gap: 4px; align-items: center; }
+.sda-cond-cell select { flex: 1; }
+.sda-cond-cell .sda-arrow { color: #888; }
+
+.sda-mapping { background: #f8f8f8; padding: 6px; border: 1px dashed #ccc; border-radius: 3px; }
+.sda-mapping-row { display: grid; grid-template-columns: 1fr auto 1fr auto; gap: 4px; margin-bottom: 4px; align-items: center; }
+.sda-mapping-row .sda-arrow { color: #888; }
+
+.sda-error { color: #c0392b; font-size: 12px; margin-top: 8px; }
+.sda-success { color: #27ae60; font-size: 12px; margin-top: 8px; }
+.sda-disabled { opacity: 0.5; pointer-events: none; }
+
+/* ── 可搜尋下拉 (searchableSelect) ── */
+.sda-ss-wrap { position: relative; }
+.sda-ss-input {
+  width: 100%; box-sizing: border-box;
+  padding: 4px 24px 4px 6px; font-size: 13px;
+  border: 1px solid #d4d7d7; border-radius: 3px;
+  background: #fff url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6'%3E%3Cpath d='M0 0l5 6 5-6z' fill='%23999'/%3E%3C/svg%3E") no-repeat right 7px center;
+  cursor: pointer;
+}
+.sda-ss-input:focus { outline: none; border-color: #3498db; box-shadow: 0 0 0 2px rgba(52,152,219,.2); cursor: text; }
+.sda-ss-list {
+  display: none;
+  position: absolute; top: calc(100% + 2px); left: 0; right: 0; z-index: 9999;
+  max-height: 220px; overflow-y: auto;
+  background: #fff; border: 1px solid #b0c4d4; border-radius: 3px;
+  box-shadow: 0 4px 12px rgba(0,0,0,.15);
+}
+.sda-ss-item {
+  padding: 6px 10px; font-size: 13px; cursor: pointer;
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.sda-ss-item:hover { background: #eaf4fb; }
+.sda-ss-item.sda-ss-active { background: #d6eaf8; font-weight: 600; }
+.sda-ss-empty { padding: 8px 10px; font-size: 12px; color: #aaa; }
+
+/* ── 複製按鈕 ── */
+.sda-btn-copy { color: #2471a3; }
+
+/* ── 規則 grid 欄位不再截斷 ── */
+.sda-rule-grid { display: grid; grid-template-columns: 160px 1fr; gap: 6px 12px; align-items: center; }
+.sda-rule-grid .sda-ss-wrap, .sda-rule-grid select, .sda-rule-grid input[type=text], .sda-rule-grid textarea {
+  min-width: 0; width: 100%; box-sizing: border-box;
+}
