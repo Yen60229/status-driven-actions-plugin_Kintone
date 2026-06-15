@@ -870,15 +870,11 @@
       }
     }
 
-    if (trigger === 'process.proceed' && touchedFields.length > 0) {
-
-      if (SELF_TOKEN) {
+    if (trigger === 'process.proceed') {
+      if (touchedFields.length > 0 && SELF_TOKEN) {
         const recordId = record.$id && record.$id.value;
-
         const canEdit = editCheckPromise ? await editCheckPromise : await checkEditPermission(recordId);
-
         if (!canEdit) {
-
           pendingWrite = {
             recordId,
             changedFields: snapshotFields(record, [...new Set(touchedFields)]),
