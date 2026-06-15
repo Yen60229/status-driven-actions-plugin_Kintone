@@ -15,31 +15,22 @@
     "zh-TW": "依狀態自動寫入欄位值，並可同時寫入其他 App 的記錄。"
   },
   "homepage_url": {
-    "ja": "https://www.kintone.com/",
-    "en": "https://www.kintone.com/",
-    "zh": "https://www.kintone.com/",
-    "zh-TW": "https://www.kintone.com/"
+    "ja": "https://www.kintone.com/en-us/features/plugins/",
+    "en": "https://www.kintone.com/en-us/features/plugins/",
+    "zh": "https://www.kintone.com/en-us/features/plugins/",
+    "zh-TW": "https://www.kintone.com/en-us/features/plugins/"
   },
   "icon": "source/image/icon.png",
   "desktop": {
-    "js": [
-      "dist/desktop.js"
-    ]
+    "js": ["dist/desktop.js"]
   },
   "mobile": {
-    "js": [
-      "dist/mobile.js"
-    ]
+    "js": ["dist/mobile.js"]
   },
   "config": {
     "html": "source/html/config.html",
-    "js": [
-      "3rd_parties/kintone-config-helper.js",
-      "dist/config.js"
-    ],
-    "css": [
-      "source/css/config.css"
-    ],
+    "js": ["3rd_parties/kintone-config-helper.js", "dist/config.js"],
+    "css": ["source/css/config.css"],
     "required_params": []
   }
 }
