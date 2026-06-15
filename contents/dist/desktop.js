@@ -833,8 +833,22 @@
     return event;
   };
 
+  // 待確認的存檔成功 log：submit 階段先暫存，待 *.submit.success 確認存檔後才寫。
+  let _pendingSubmitLog = null;
+
+  const successLogMessage = (matched, labels) => `已套用 ${matched} 條規則：${labels.join('、')}`;
+
+  const failureLogMessage = (ev) => {
+    const info = _runInfo.error;
+    return info
+      ? `[${info.code || 'no-code'}] ${info.rule ? '規則「' + info.rule + '」: ' : ''}${info.rawMessage}`
+      : String(ev && ev.error);
+  };
+
   const loggedApply = (trigger) => async (ev) => {
     _runInfo = { matched: 0, labels: [] };
+    if (/submit/.test(trigger)) _pendingSubmitLog = null;
+
     let out;
     let thrown = null;
     try {
@@ -845,25 +859,57 @@
       if (ev && ev.type) recordError(ev, err, '');
       out = ev;
     }
+
     const errored = !!(ev && ev.error);
-    // 簽核(proceed)的成敗改由網路攔截器（updateWithStatus）記錄，避免一次簽核出現兩筆。
-    // 但「規則錯誤導致簽核被中止」時 kintone 不會送出 updateWithStatus、攔截器看不到，這裡仍要補記。
-    // 成功一律由網路攔截器（來源 B）記錄，A 只補記「規則出錯擋住動作」的失敗。
-    if (LOG_APP && (_runInfo.matched > 0 || thrown) && errored) {
+    if (!LOG_APP) return out;
+
+    // 失敗：規則出錯擋下動作（含丟例外）。proceed 與 submit 皆於此即時記錄。
+    if (errored && (_runInfo.matched > 0 || thrown)) {
       const info = _runInfo.error;
-      const category = errored ? (info ? info.category : 'system') : 'success';
-      const message = errored
-        ? (info
-            ? `[${info.code || 'no-code'}] ${info.rule ? '規則「' + info.rule + '」: ' : ''}${info.rawMessage}`
-            : String(ev.error))
-        : `已套用 ${_runInfo.matched} 條規則：${_runInfo.labels.join('、')}`;
       try {
-        await writeLog({ ev, trigger, result: errored ? '失敗' : '成功', category, message });
+        await writeLog({
+          ev, trigger, result: '失敗',
+          category: info ? info.category : 'system',
+          message: failureLogMessage(ev),
+        });
       } catch (e) {
         console.error('[sda] writeLog failed（請確認 Log App ID / Token / 欄位代碼是否正確）', e);
       }
+      return out;
+    }
+
+    // 成功且有命中規則：
+    //   proceed → 樂觀記錄（kintone 無 process.proceed.success 事件可掛）。
+    //   submit  → 暫存，待 *.submit.success 確認存檔成功後再寫（見 flushSubmitLog）。
+    if (!errored && _runInfo.matched > 0) {
+      if (trigger === 'process.proceed') {
+        try {
+          await writeLog({
+            ev, trigger, result: '成功', category: 'success',
+            message: successLogMessage(_runInfo.matched, _runInfo.labels),
+          });
+        } catch (e) {
+          console.error('[sda] writeLog failed', e);
+        }
+      } else if (/submit/.test(trigger)) {
+        _pendingSubmitLog = { trigger, matched: _runInfo.matched, labels: _runInfo.labels.slice() };
+      }
     }
     return out;
+  };
+
+  const flushSubmitLog = async (ev) => {
+    if (!LOG_APP || !_pendingSubmitLog) return;
+    const { trigger, matched, labels } = _pendingSubmitLog;
+    _pendingSubmitLog = null;
+    try {
+      await writeLog({
+        ev, trigger, result: '成功', category: 'success',
+        message: successLogMessage(matched, labels),
+      });
+    } catch (e) {
+      console.error('[sda] writeLog failed', e);
+    }
   };
 
   const E = (names) => names.flatMap((n) => [`app.record.${n}`, `mobile.app.record.${n}`]);
@@ -887,6 +933,10 @@
   kintone.events.on(E(['edit.submit']), loggedApply('edit.submit'));
 
   kintone.events.on(E(['detail.process.proceed']), loggedApply('process.proceed'));
+
+  kintone.events.on(E(['create.submit.success']), async (ev) => { await flushSubmitLog(ev); return ev; });
+
+  kintone.events.on(E(['edit.submit.success']), async (ev) => { await flushSubmitLog(ev); return ev; });
 
   kintone.events.on(E(['detail.show']),
     safeHandler(handleDetailShow)
