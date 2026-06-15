@@ -277,6 +277,85 @@
     }
   };
 
+  // ===== 網路攔截器：記錄 kintone 自身的記錄動作請求（簽核 / 存檔）成敗 =====
+  // 這些動作發生在外掛 event handler return 之後，事件模型攔不到，必須包裝底層 fetch / XHR。
+  // 只記「動作型」端點（updateWithStatus = 簽核+編輯、update、create、status），且僅 LOG_APP 有設定時。
+  const ACTION_URL_RE = /\/k\/(api\/record\/(updateWithStatus|update|create)|v1\/record\/status|v1\/records?)\b/;
+  // 防遞迴：外掛自己寫 Log（postLog）也會發 fetch，期間設 true 讓攔截器跳過。
+  let _logInFlight = false;
+
+  const actionEventName = (url) => {
+    if (/updateWithStatus/.test(url)) return 'kintone.proceed';
+    if (/\/api\/record\/update/.test(url)) return 'kintone.update';
+    if (/\/api\/record\/create/.test(url)) return 'kintone.create';
+    if (/v1\/record\/status/.test(url)) return 'kintone.status';
+    return 'kintone.action';
+  };
+
+  const recordIdFromUrl = (url) => {
+    const m = /record(?:%3D|=)(\d+)/i.exec(url || '');
+    return m ? m[1] : '';
+  };
+
+  const logKintoneAction = async (url, status, bodyText) => {
+    if (!LOG_APP) return;
+    const ok = status >= 200 && status < 300;
+    const fakeErr = { message: bodyText || '' };
+    const code = ok ? '' : errorCodeOf(fakeErr);
+    const category = ok ? 'success' : classifyError(fakeErr);
+    const trigger = actionEventName(url);
+    const recId = recordIdFromUrl(url);
+    const message = ok
+      ? `HTTP ${status}：${trigger} 成功`
+      : `[${code || 'no-code'}] HTTP ${status || 'network'}：${trigger} 失敗 ${String(bodyText || '').slice(0, 500)}`;
+    _logInFlight = true;
+    try {
+      await writeLog({ ev: { recordId: recId }, trigger, result: ok ? '成功' : '失敗', category, message });
+    } catch (e) {
+      console.error('[sda] 攔截器寫 Log 失敗', e);
+    } finally {
+      _logInFlight = false;
+    }
+  };
+
+  if (LOG_APP) {
+    const origFetch = window.fetch;
+    if (typeof origFetch === 'function') {
+      window.fetch = function (...args) {
+        const req = args[0];
+        const url = (typeof req === 'string') ? req : (req && req.url) || '';
+        const p = origFetch.apply(this, args);
+        if (!_logInFlight && ACTION_URL_RE.test(url)) {
+          p.then((res) => {
+            res.clone().text()
+              .then((t) => logKintoneAction(url, res.status, t))
+              .catch(() => logKintoneAction(url, res.status, ''));
+          }).catch((err) => logKintoneAction(url, 0, (err && err.message) || 'network error'));
+        }
+        return p;
+      };
+    }
+
+    const XHR = window.XMLHttpRequest;
+    if (XHR && XHR.prototype) {
+      const origOpen = XHR.prototype.open;
+      const origSend = XHR.prototype.send;
+      XHR.prototype.open = function (method, url, ...rest) {
+        this.__sda_url = url || '';
+        return origOpen.call(this, method, url, ...rest);
+      };
+      XHR.prototype.send = function (...sendArgs) {
+        const url = this.__sda_url || '';
+        if (!_logInFlight && ACTION_URL_RE.test(url)) {
+          this.addEventListener('loadend', () => {
+            logKintoneAction(url, this.status, this.responseText || '');
+          });
+        }
+        return origSend.apply(this, sendArgs);
+      };
+    }
+  }
+
   const uuid = () => (crypto && crypto.randomUUID
     ? crypto.randomUUID()
     : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -895,8 +974,11 @@
       if (ev && ev.type) recordError(ev, err, '');
       out = ev;
     }
-    if (LOG_APP && (_runInfo.matched > 0 || thrown)) {
-      const errored = !!(ev && ev.error);
+    const errored = !!(ev && ev.error);
+    // 簽核(proceed)的成敗改由網路攔截器（updateWithStatus）記錄，避免一次簽核出現兩筆。
+    // 但「規則錯誤導致簽核被中止」時 kintone 不會送出 updateWithStatus、攔截器看不到，這裡仍要補記。
+    const skipProceedSuccess = (trigger === 'process.proceed') && !errored;
+    if (LOG_APP && (_runInfo.matched > 0 || thrown) && !skipProceedSuccess) {
       const info = _runInfo.error;
       // 失敗 → 寫原始技術訊息（含錯誤碼 + 規則名）；成功 → 寫命中的規則清單。
       const category = errored ? (info ? info.category : 'system') : 'success';
