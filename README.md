@@ -1,6 +1,6 @@
 # 狀態驅動動作外掛 — 使用說明書
 
-> 適用版本：v1.3.0　　最後更新：2026-06-15
+> 適用版本：v1.5.0　　最後更新：2026-06-15
 >
 > 💡 程式碼（`desktop.js` / `mobile.js` / `config.js`）已移除全部註解，所有技術說明集中在本文件「**附錄 B：技術說明（開發者參考）**」。
 
@@ -517,7 +517,7 @@
 
 只註冊 6 個「使用者操作」事件：`create.show`、`edit.show`、`create.submit`、`edit.submit`、`detail.process.proceed`、`detail.show`。
 
-- **無** `setInterval`／輪詢／常駐迴圈；唯一的 `setTimeout` 是 `setFieldShown` 的下一個 tick（0ms）與伺服器時間 500ms 逾時保護。
+- **無** `setInterval`／輪詢／常駐迴圈；唯一的 `setTimeout` 是 `setFieldShown` 的下一個 tick（0ms）。
 - 每次觸發先做快速退出：無規則就立刻 return；需要時間才打 API。對低階電腦無負擔。
 
 ### B-3. `process.proceed` 寫入流程（核心）
@@ -536,9 +536,9 @@
 - `CONFIG.logAppId` / `CONFIG.logToken`：執行 Log 用（見 B-8）；若兩者都有，啟動時把 logToken 併入 `TOKENS[logAppId]`。
 - `apiWithToken(path, method, body, appIdForToken)`：有對應 Token 時用 `fetch` + `X-Cybozu-API-Token` header；否則退回 `kintone.api`（plugin proxy，走使用者 session）。
 
-### B-5. 伺服器時間
+### B-5. 時間來源
 
-`getServerTime()` 對 `location.href` 發 `HEAD` 取回應的 `Date` header，避免使用者端時區/時鐘誤差。5 秒快取、500ms 逾時則退回本機時間。**Lazy**：只有當命中規則真的需要 `now`/`today`/`nowTime` 時才呼叫。
+`now`/`today`/`nowTime` 直接取自瀏覽器本機時鐘（`new Date()`），不發任何網路請求。早期版本曾以對 `location.href` 發 `HEAD` 取伺服器 `Date` header 來避開使用者端時鐘誤差，v1.5.0 起移除，換取簽核/存檔當下少一趟網路往返。
 
 ### B-6. `valueSource` 一覽與參數格式
 
@@ -566,8 +566,12 @@
 
 ### B-8. 執行 Log（v1.3.0）
 
-- 設定 `LOG_APP`（appId）後啟用；`loggedApply()` 包住 `create.submit`/`edit.submit`/`process.proceed`。
-- 每次事件開始重置 `_runInfo`；`applyRules` 內記下命中規則數與標籤；事件結束後，**命中數 > 0 或發生例外**時才寫一筆 log。
+- 設定 `LOG_APP`（appId）後啟用；`loggedApply()` 包住 `create.submit`/`edit.submit`/`process.proceed`，另註冊 `create.submit.success`/`edit.submit.success`。
+- 每次事件開始重置 `_runInfo`；`applyRules` 內記下命中規則數與標籤。寫 log 的時機（方案 A，v1.5.0）：
+  - **失敗**（命中數 > 0 或發生例外，且 `event.error` 有值）→ 在 `loggedApply` 即時寫一筆失敗。
+  - **簽核成功**（`process.proceed` 命中且無錯）→ 在 `loggedApply` 樂觀寫一筆成功；kintone 無 `process.proceed.success` 事件可掛。
+  - **存檔成功**（`create.submit`/`edit.submit` 命中且無錯）→ 暫存於 `_pendingSubmitLog`，待官方 `*.submit.success` 觸發時由 `flushSubmitLog()` 確認存檔成功後才寫。
+  - 早期（v1.4.0–v1.4.3）以全域 `fetch`/`XHR` 攔截器記錄原生動作成敗，v1.5.0 起移除，改為上述事件層做法，不再污染全域。
 - 寫入欄位：`LOG_APP`／`LOG_RECORD` 寫數字字串（數值欄位）；`LOG_USER` 寫 `[{ code }]`（USER_SELECT 需陣列）；其餘為文字。
 - 用 `LOG_TOKEN`（若有）寫入 → 無 Log App 權限的操作者也能成功。寫 log 失敗只 `console.error`，**絕不阻擋存檔**。
 - Log App 需要的欄位代碼與型別見第 9 節表格。

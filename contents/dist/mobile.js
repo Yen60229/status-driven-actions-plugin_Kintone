@@ -132,47 +132,6 @@
     }
   };
 
-  const TIME_VALUE_SOURCES = new Set(['now', 'today', 'nowTime']);
-  const ruleNeedsServerTime = (rule) => {
-    if (TIME_VALUE_SOURCES.has(rule.valueSource)) return true;
-    if (rule.valueSource === 'appendSubtable') {
-      const subRules = (rule.valueParam && rule.valueParam.subRules) || [];
-      return subRules.some((sr) => TIME_VALUE_SOURCES.has(sr.valueSource));
-    }
-    if ((rule.fieldMapping || []).some((m) => TIME_VALUE_SOURCES.has(m.valueSource))) return true;
-    if ((rule.keyMapping || []).some((m) => TIME_VALUE_SOURCES.has(m.valueSource))) return true;
-    return false;
-  };
-
-  let _timeCache = { at: 0, value: null };
-  const SERVER_TIME_CACHE_MS = 5000;
-  const SERVER_TIME_TIMEOUT_MS = 500;
-
-  const getServerTime = async () => {
-
-    if (_timeCache.value && (Date.now() - _timeCache.at) < SERVER_TIME_CACHE_MS) {
-      return _timeCache.value;
-    }
-
-    try {
-
-      const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), SERVER_TIME_TIMEOUT_MS);
-      const res = await fetch(location.href, { method: 'HEAD', cache: 'no-store', signal: ctl.signal });
-      clearTimeout(timer);
-      const dateHeader = res.headers.get('Date');
-      const t = dateHeader ? new Date(dateHeader) : new Date();
-      _timeCache = { at: Date.now(), value: t };
-      return t;
-    } catch (e) {
-
-      console.warn('[sda][getServerTime] fallback to local time:', e.name || e.message);
-      const t = new Date();
-      _timeCache = { at: Date.now(), value: t };
-      return t;
-    }
-  };
-
   const checkEditPermission = async (recordId) => {
     try {
       const resp = await kintone.api(
@@ -282,86 +241,6 @@
     }
   };
 
-  // ===== 網路攔截器：記錄 kintone 自身的記錄動作請求（簽核 / 存檔）成敗 =====
-  // 這些動作發生在外掛 event handler return 之後，事件模型攔不到，必須包裝底層 fetch / XHR。
-  // 只記「動作型」端點（updateWithStatus = 簽核+編輯、update、create、status），且僅 LOG_APP 有設定時。
-  const ACTION_URL_RE = /\/k\/(api\/record\/(updateWithStatus|update|create)|v1\/record\/status)\b/;
-  // 防遞迴：外掛自己寫 Log（postLog）也會發 fetch，期間設 true 讓攔截器跳過。
-  let _logInFlight = false;
-
-  const actionEventName = (url) => {
-    if (/updateWithStatus/.test(url)) return 'kintone.proceed';
-    if (/\/api\/record\/update/.test(url)) return 'kintone.update';
-    if (/\/api\/record\/create/.test(url)) return 'kintone.create';
-    return 'kintone.status';
-  };
-
-  const recordIdFromUrl = (url) => {
-    const fromReq = /record(?:%3D|=)(\d+)/i.exec(url || '');
-    if (fromReq) return fromReq[1];
-    const fromPage = /[#&?]record(?:%3D|=)(\d+)/i.exec(window.location.href || '');
-    return fromPage ? fromPage[1] : '';
-  };
-
-  const logKintoneAction = async (url, status, bodyText) => {
-    if (!LOG_APP) return;
-    const ok = status >= 200 && status < 300;
-    const fakeErr = { message: bodyText || '' };
-    const code = ok ? '' : errorCodeOf(fakeErr);
-    const category = ok ? 'success' : classifyError(fakeErr);
-    const trigger = actionEventName(url);
-    const recId = recordIdFromUrl(url);
-    const message = ok
-      ? `HTTP ${status}：${trigger} 成功`
-      : `[${code || 'no-code'}] HTTP ${status || 'network'}：${trigger} 失敗 ${String(bodyText || '').slice(0, 500)}`;
-    _logInFlight = true;
-    try {
-      await writeLog({ ev: { recordId: recId }, trigger, result: ok ? '成功' : '失敗', category, message });
-    } catch (e) {
-      console.error('[sda] 攔截器寫 Log 失敗', e);
-    } finally {
-      _logInFlight = false;
-    }
-  };
-
-  if (LOG_APP) {
-    const origFetch = window.fetch;
-    if (typeof origFetch === 'function') {
-      window.fetch = function (...args) {
-        const req = args[0];
-        const url = (typeof req === 'string') ? req : (req && req.url) || '';
-        const p = origFetch.apply(this, args);
-        if (!_logInFlight && ACTION_URL_RE.test(url)) {
-          p.then((res) => {
-            res.clone().text()
-              .then((t) => logKintoneAction(url, res.status, t))
-              .catch(() => logKintoneAction(url, res.status, ''));
-          }).catch((err) => logKintoneAction(url, 0, (err && err.message) || 'network error'));
-        }
-        return p;
-      };
-    }
-
-    const XHR = window.XMLHttpRequest;
-    if (XHR && XHR.prototype) {
-      const origOpen = XHR.prototype.open;
-      const origSend = XHR.prototype.send;
-      XHR.prototype.open = function (method, url, ...rest) {
-        this.__sda_url = url || '';
-        return origOpen.call(this, method, url, ...rest);
-      };
-      XHR.prototype.send = function (...sendArgs) {
-        const url = this.__sda_url || '';
-        if (!_logInFlight && ACTION_URL_RE.test(url)) {
-          this.addEventListener('loadend', () => {
-            logKintoneAction(url, this.status, this.responseText || '');
-          });
-        }
-        return origSend.apply(this, sendArgs);
-      };
-    }
-  }
-
   const uuid = () => (crypto && crypto.randomUUID
     ? crypto.randomUUID()
     : 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, (c) => {
@@ -370,14 +249,14 @@
       }));
 
   const resolveValue = async (spec, ctx) => {
-    const { event, record, serverTime } = ctx;
+    const { event, record } = ctx;
     let _resolvedValue;
     switch (spec.valueSource) {
       case 'fixed':         _resolvedValue = spec.valueParam; break;
       case 'loginUser':     _resolvedValue = kintone.getLoginUser(); break;
-      case 'today':         _resolvedValue = toISODate(serverTime || new Date()); break;
-      case 'nowTime':       _resolvedValue = toHHmm(serverTime || new Date()); break;
-      case 'now':           _resolvedValue = (serverTime || new Date()).toISOString(); break;
+      case 'today':         _resolvedValue = toISODate(new Date()); break;
+      case 'nowTime':       _resolvedValue = toHHmm(new Date()); break;
+      case 'now':           _resolvedValue = new Date().toISOString(); break;
       case 'recordNumber':  _resolvedValue = record.$id && record.$id.value; break;
       case 'recordId':      _resolvedValue = record.$id && record.$id.value; break;
       case 'appId':         _resolvedValue = getAppId(); break;
@@ -460,7 +339,7 @@
         const prevTimeStr = prev.value[sinceField] && prev.value[sinceField].value;
         if (!prevTimeStr) { _resolvedValue = 0; break; }
         const prevDate = new Date(prevTimeStr);
-        const now = serverTime || new Date();
+        const now = new Date();
         const diffMin = Math.round((now.getTime() - prevDate.getTime()) / 60000);
         _resolvedValue = Number.isFinite(diffMin) && diffMin >= 0 ? diffMin : 0;
         break;
@@ -653,7 +532,6 @@
         break;
       case 'edit.show':
       case 'edit.submit':
-      case 'detail.show':
       default: {
         const cur = (record.$status && record.$status.value) || record['狀態']?.value || '';
         if (rule.statusCond && rule.statusCond !== '*' && rule.statusCond !== cur) return false;
@@ -838,21 +716,11 @@
 
     if (!CONFIG.rules || CONFIG.rules.length === 0) return event;
 
-    const needsTime = CONFIG.rules.some((r) =>
-      r.enabled !== false && triggerMatches(r, trigger) && ruleNeedsServerTime(r)
-    );
-
-    const serverTimePromise = needsTime ? getServerTime() : Promise.resolve(null);
     const editCheckPromise  = (trigger === 'process.proceed' && SELF_TOKEN && record.$id?.value)
       ? checkEditPermission(record.$id.value)
       : null;
 
-    const serverTime = await serverTimePromise;
-    if (trigger === 'process.proceed') {
-    }
-    (CONFIG.rules || []).forEach((r, i) => {
-    });
-    const ctx = { event, record, trigger, serverTime };
+    const ctx = { event, record, trigger };
 
     const matched = (CONFIG.rules || []).filter((r) =>
       r.enabled !== false && triggerMatches(r, trigger) && statusMatches(r, event, record)
@@ -964,8 +832,22 @@
     return event;
   };
 
+  // 待確認的存檔成功 log：submit 階段先暫存，待 *.submit.success 確認存檔後才寫。
+  let _pendingSubmitLog = null;
+
+  const successLogMessage = (matched, labels) => `已套用 ${matched} 條規則：${labels.join('、')}`;
+
+  const failureLogMessage = (ev) => {
+    const info = _runInfo.error;
+    return info
+      ? `[${info.code || 'no-code'}] ${info.rule ? '規則「' + info.rule + '」: ' : ''}${info.rawMessage}`
+      : String(ev && ev.error);
+  };
+
   const loggedApply = (trigger) => async (ev) => {
     _runInfo = { matched: 0, labels: [] };
+    if (/submit/.test(trigger)) _pendingSubmitLog = null;
+
     let out;
     let thrown = null;
     try {
@@ -976,25 +858,57 @@
       if (ev && ev.type) recordError(ev, err, '');
       out = ev;
     }
+
     const errored = !!(ev && ev.error);
-    // 簽核(proceed)的成敗改由網路攔截器（updateWithStatus）記錄，避免一次簽核出現兩筆。
-    // 但「規則錯誤導致簽核被中止」時 kintone 不會送出 updateWithStatus、攔截器看不到，這裡仍要補記。
-    // 成功一律由網路攔截器（來源 B）記錄，A 只補記「規則出錯擋住動作」的失敗。
-    if (LOG_APP && (_runInfo.matched > 0 || thrown) && errored) {
+    if (!LOG_APP) return out;
+
+    // 失敗：規則出錯擋下動作（含丟例外）。proceed 與 submit 皆於此即時記錄。
+    if (errored && (_runInfo.matched > 0 || thrown)) {
       const info = _runInfo.error;
-      const category = errored ? (info ? info.category : 'system') : 'success';
-      const message = errored
-        ? (info
-            ? `[${info.code || 'no-code'}] ${info.rule ? '規則「' + info.rule + '」: ' : ''}${info.rawMessage}`
-            : String(ev.error))
-        : `已套用 ${_runInfo.matched} 條規則：${_runInfo.labels.join('、')}`;
       try {
-        await writeLog({ ev, trigger, result: errored ? '失敗' : '成功', category, message });
+        await writeLog({
+          ev, trigger, result: '失敗',
+          category: info ? info.category : 'system',
+          message: failureLogMessage(ev),
+        });
       } catch (e) {
         console.error('[sda] writeLog failed（請確認 Log App ID / Token / 欄位代碼是否正確）', e);
       }
+      return out;
+    }
+
+    // 成功且有命中規則：
+    //   proceed → 樂觀記錄（kintone 無 process.proceed.success 事件可掛）。
+    //   submit  → 暫存，待 *.submit.success 確認存檔成功後再寫（見 flushSubmitLog）。
+    if (!errored && _runInfo.matched > 0) {
+      if (trigger === 'process.proceed') {
+        try {
+          await writeLog({
+            ev, trigger, result: '成功', category: 'success',
+            message: successLogMessage(_runInfo.matched, _runInfo.labels),
+          });
+        } catch (e) {
+          console.error('[sda] writeLog failed', e);
+        }
+      } else if (/submit/.test(trigger)) {
+        _pendingSubmitLog = { trigger, matched: _runInfo.matched, labels: _runInfo.labels.slice() };
+      }
     }
     return out;
+  };
+
+  const flushSubmitLog = async (ev) => {
+    if (!LOG_APP || !_pendingSubmitLog) return;
+    const { trigger, matched, labels } = _pendingSubmitLog;
+    _pendingSubmitLog = null;
+    try {
+      await writeLog({
+        ev, trigger, result: '成功', category: 'success',
+        message: successLogMessage(matched, labels),
+      });
+    } catch (e) {
+      console.error('[sda] writeLog failed', e);
+    }
   };
 
   const E = (names) => names.flatMap((n) => [`app.record.${n}`, `mobile.app.record.${n}`]);
@@ -1018,6 +932,10 @@
   kintone.events.on(E(['edit.submit']), loggedApply('edit.submit'));
 
   kintone.events.on(E(['detail.process.proceed']), loggedApply('process.proceed'));
+
+  kintone.events.on(E(['create.submit.success']), async (ev) => { await flushSubmitLog(ev); return ev; });
+
+  kintone.events.on(E(['edit.submit.success']), async (ev) => { await flushSubmitLog(ev); return ev; });
 
   kintone.events.on(E(['detail.show']),
     safeHandler(handleDetailShow)
