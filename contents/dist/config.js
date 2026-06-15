@@ -210,9 +210,9 @@
     ]));
     sec.appendChild(el('p', { class: 'sda-section-help', style: { color: '#b9770e' } }, [
       '⚠ Log App 需先建立以下「欄位代碼 (Field Code)」：' +
-      'LOG_EVENT、LOG_RESULT、LOG_RECORD（單行文字）、' +
-      'LOG_APP（數值）、LOG_USER（使用者選擇 USER_SELECT）、' +
-      'LOG_MESSAGE（多行文字）。'
+      'LOG_EVENT、LOG_RESULT、LOG_CATEGORY（單行文字）、' +
+      'LOG_APP、LOG_RECORD（數值）、' +
+      'LOG_USER（使用者選擇 USER_SELECT）、LOG_MESSAGE（多行文字）。'
     ]));
 
     const mkRow = (label, input) => {

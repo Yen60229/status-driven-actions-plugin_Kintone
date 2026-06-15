@@ -439,20 +439,33 @@
 
 > v1.3.0 新增。**選填功能**——不設定就完全不啟用，沒有任何額外負擔。
 
-設定後，每次「**儲存 / 流程推進**」且**有命中規則**時，外掛會自動往你指定的一個「Log App」新增一筆記錄，讓你第一時間知道每次事件是 **成功** 還是 **失敗**、以及相關訊息。
+設定後，每次「**儲存 / 流程推進**」且**有命中規則**時，外掛會自動往你指定的一個「Log App」新增一筆記錄，讓你第一時間知道每次事件是 **成功** 還是 **失敗**、屬於哪一類錯誤、以及相關訊息。
 
 ### 步驟 1：建立一個「Log App」
 
-新增一個 kintone App（例如叫「外掛執行紀錄」），並建立以下 **6 個欄位**，欄位代碼必須**完全一致**：
+新增一個 kintone App（例如叫「外掛執行紀錄」），並建立以下 **7 個欄位**，欄位代碼必須**完全一致**：
 
 | 欄位代碼 (Field Code) | 欄位類型 | 內容 |
 |---|---|---|
 | `LOG_EVENT` | 單行文字 | 觸發的事件（如 `process.proceed`） |
 | `LOG_RESULT` | 單行文字 | `成功` 或 `失敗` |
-| `LOG_RECORD` | 單行文字 | 來源記錄的編號 |
+| `LOG_CATEGORY` | 單行文字 | 分類：`success`／`session`／`permission`／`config`／`system` |
 | `LOG_APP` | **數值** | 來源 App 的 ID |
+| `LOG_RECORD` | **數值** | 來源記錄的編號 |
 | `LOG_USER` | **使用者選擇** | 觸發事件的操作者 |
-| `LOG_MESSAGE` | 多行文字 | 成功：命中了哪些規則；失敗：錯誤訊息 |
+| `LOG_MESSAGE` | 多行文字 | 成功：命中了哪些規則；失敗：`[錯誤碼] 規則「名稱」: 原始訊息` |
+
+> 💡 `LOG_CATEGORY` 讓你能快速篩選：`config`／`system` 是**需要處理的**（外掛設定錯誤或系統故障）；`permission`／`session` 多半是**使用者操作問題**，可忽略。
+
+### 錯誤分類對照（`LOG_CATEGORY`）
+
+| 分類 | 意思 | 常見錯誤碼 | 該怎麼辦 |
+|---|---|---|---|
+| `success` | 成功 | — | 無 |
+| `session` | 登入逾時 | `CB_AU01` | 請使用者重新登入；畫面已顯示友善訊息 |
+| `permission` | 無權限 | `GAIA_NO01`、`CB_NO01`、`GAIA_DA02` | 檢查使用者權限或改用 API Token |
+| `config` | 外掛設定錯誤 | `GAIA_FE01`（欄位不存在）、`GAIA_AP01`（App 不存在）、`CB_IL02`（Token 無效） | **回外掛設定修正規則** |
+| `system` | 系統／網路錯誤 | 無錯誤碼、`Failed to fetch`、5xx | 多為暫時性，重試；持續發生請找工程師 |
 
 ### 步驟 2：（建議）建立 Log App 的 API Token
 
@@ -473,8 +486,8 @@
 
 填好按「**儲存**」→ 回到 App「**更新 App**」即生效。
 
-> 🔸 只有 `create.submit`／`edit.submit`／`process.proceed` 且**至少命中一條規則**時才會寫 log，避免每次空白送出都產生噪音記錄。
-> 🔸 寫 log 失敗**絕不會**阻擋使用者存檔，只會在 F12 Console 留下 `console.error`。
+> 🔸 只有 `create.submit`／`edit.submit`／`process.proceed` 且**至少命中一條規則**（或外掛本身發生例外）時才會寫 log，避免每次空白送出都產生噪音記錄。
+> 🔸 寫 log 失敗**絕不會**阻擋使用者存檔。若整筆寫入失敗（通常是欄位代碼/類型設錯），外掛會**自動用最小欄位（`LOG_EVENT`／`LOG_RESULT`／`LOG_MESSAGE`）重試一次**，確保核心訊息至少能落地；兩次都失敗才放棄，並在 F12 Console 留下 `console.error` 說明可能原因。
 
 ---
 
@@ -555,9 +568,21 @@
 
 - 設定 `LOG_APP`（appId）後啟用；`loggedApply()` 包住 `create.submit`/`edit.submit`/`process.proceed`。
 - 每次事件開始重置 `_runInfo`；`applyRules` 內記下命中規則數與標籤；事件結束後，**命中數 > 0 或發生例外**時才寫一筆 log。
-- 寫入欄位：`LOG_APP` 寫 `getAppId()`（數值欄位接受數字字串）；`LOG_USER` 寫 `[{ code }]`（USER_SELECT 需陣列）；其餘為文字。
+- 寫入欄位：`LOG_APP`／`LOG_RECORD` 寫數字字串（數值欄位）；`LOG_USER` 寫 `[{ code }]`（USER_SELECT 需陣列）；其餘為文字。
 - 用 `LOG_TOKEN`（若有）寫入 → 無 Log App 權限的操作者也能成功。寫 log 失敗只 `console.error`，**絕不阻擋存檔**。
 - Log App 需要的欄位代碼與型別見第 9 節表格。
+
+### B-8a. 錯誤分類與友善訊息
+
+- `errorCodeOf(err)`：同時支援兩種錯誤來源——`kintone.api`（proxy）的 `err.code`，以及 `apiWithToken`（fetch）的 `err.message` 內嵌 JSON／文字（用 regex 抓 `CB_*`／`GAIA_*`）。
+- `classifyError(err)` → `session`／`permission`／`config`／`system`（碼表見 `PERMISSION_CODES`／`CONFIG_CODES`）。
+- `friendlyError(err, prefix)`：`session`／`permission` 回傳固定友善訊息；`config`／`system` 回傳 `prefix: 原始訊息`（prefix 為規則名）。
+- `recordError(event, err, ruleLabel)`：集中處理——友善訊息寫 `event.error`（畫面用）；技術細節 `{ category, code, rule, rawMessage }` 存進 `_runInfo.error`（Log 用）。
+- 寫 Log 時：成功 → `LOG_CATEGORY=success`、訊息為命中規則清單；失敗 → 用 `_runInfo.error` 組 `[code] 規則「名稱」: rawMessage`。
+
+### B-8b. 寫 Log 的兩層保底
+
+`writeLog` 先寫完整 7 欄位；若失敗（最常見為欄位代碼/類型設錯），自動改用**最小欄位**（`LOG_EVENT`／`LOG_RESULT`／`LOG_MESSAGE`，皆純文字，並把分類併入訊息）重試一次，避開脆弱的數值（`LOG_APP`/`LOG_RECORD`）與 `USER_SELECT`（`LOG_USER`）欄位；兩次都失敗才放棄。`postLog()` 為純送出函式。
 
 ### B-9. 欄位值寫入判別（classifyWrite）
 

@@ -91,10 +91,35 @@
   };
 
   const SESSION_EXPIRED_MESSAGE = '登入已逾時，請開「新分頁」重新登入 kintone 後，回到本頁再執行一次（已填寫的內容不會消失）。';
-  const isSessionExpiredError = (err) =>
-    (err && err.code === 'CB_AU01') || /CB_AU01/.test((err && err.message) || '');
-  const friendlyError = (err, prefix) =>
-    isSessionExpiredError(err) ? SESSION_EXPIRED_MESSAGE : `${prefix}: ${err.message}`;
+  const PERMISSION_DENIED_MESSAGE = '您沒有執行此操作的權限，請聯繫系統管理員確認權限或 API Token 設定。';
+
+  const PERMISSION_CODES = new Set(['GAIA_NO01', 'GAIA_NO02', 'CB_NO01', 'CB_NO02', 'GAIA_DA02']);
+  const CONFIG_CODES = new Set(['GAIA_FE01', 'GAIA_AP01', 'GAIA_IQ11', 'GAIA_IL26', 'CB_IL02', 'CB_VA01']);
+
+  const errorCodeOf = (err) => {
+    if (err && err.code) return err.code;
+    const msg = (err && err.message) || '';
+    const fromJson = /"code"\s*:\s*"([A-Z0-9_]+)"/.exec(msg);
+    if (fromJson) return fromJson[1];
+    const fromText = /\b(CB_[A-Z0-9]+|GAIA_[A-Z0-9]+)\b/.exec(msg);
+    return fromText ? fromText[1] : '';
+  };
+
+  const classifyError = (err) => {
+    const code = errorCodeOf(err);
+    if (code === 'CB_AU01') return 'session';
+    if (PERMISSION_CODES.has(code)) return 'permission';
+    if (CONFIG_CODES.has(code)) return 'config';
+    return 'system';
+  };
+
+  const friendlyError = (err, prefix) => {
+    switch (classifyError(err)) {
+      case 'session':    return SESSION_EXPIRED_MESSAGE;
+      case 'permission': return PERMISSION_DENIED_MESSAGE;
+      default:           return `${prefix}: ${err.message}`;
+    }
+  };
 
   const safeHandler = (fn) => async (event) => {
     try { return await fn(event); }
@@ -191,31 +216,65 @@
   };
 
   const LOG_FIELDS = {
-    event:   'LOG_EVENT',
-    result:  'LOG_RESULT',
-    app:     'LOG_APP',
-    record:  'LOG_RECORD',
-    user:    'LOG_USER',
-    message: 'LOG_MESSAGE',
+    event:    'LOG_EVENT',
+    result:   'LOG_RESULT',
+    category: 'LOG_CATEGORY',
+    app:      'LOG_APP',
+    record:   'LOG_RECORD',
+    user:     'LOG_USER',
+    message:  'LOG_MESSAGE',
   };
 
   let _runInfo = { matched: 0, labels: [] };
 
-  const writeLog = async ({ ev, trigger, result, message }) => {
+  // 集中處理錯誤：設定畫面用的友善訊息 → event.error；技術細節 → _runInfo.error（供寫 Log）。
+  const recordError = (event, err, ruleLabel) => {
+    _runInfo.error = {
+      category:   classifyError(err),
+      code:       errorCodeOf(err) || '',
+      rule:       ruleLabel || '',
+      rawMessage: (err && err.message) || String(err),
+    };
+    event.error = friendlyError(err, ruleLabel || 'Status-Driven Actions error');
+  };
+
+  const postLog = (rec) =>
+    apiWithToken('/k/v1/record.json', 'POST', { app: LOG_APP, record: rec }, LOG_APP);
+
+  const writeLog = async ({ ev, trigger, result, category, message }) => {
     if (!LOG_APP) return;
     const u = (kintone.getLoginUser && kintone.getLoginUser()) || {};
     const recId = (ev && ev.recordId) ||
       (ev && ev.record && ev.record.$id && ev.record.$id.value) || '';
-    const rec = {
-      [LOG_FIELDS.event]:   { value: String(trigger || (ev && ev.type) || '') },
-      [LOG_FIELDS.result]:  { value: String(result || '') },
-      [LOG_FIELDS.app]:     { value: getAppId() },
-      [LOG_FIELDS.record]:  { value: String(recId) },
-      [LOG_FIELDS.user]:    { value: u.code ? [{ code: u.code }] : [] },
-      [LOG_FIELDS.message]: { value: String(message == null ? '' : message).slice(0, 60000) },
+    const text = (v) => ({ value: String(v == null ? '' : v).slice(0, 60000) });
+
+    const full = {
+      [LOG_FIELDS.event]:    text(trigger || (ev && ev.type)),
+      [LOG_FIELDS.result]:   text(result),
+      [LOG_FIELDS.category]: text(category),
+      [LOG_FIELDS.app]:      { value: getAppId() },
+      [LOG_FIELDS.record]:   { value: String(recId) },
+      [LOG_FIELDS.user]:     { value: u.code ? [{ code: u.code }] : [] },
+      [LOG_FIELDS.message]:  text(message),
     };
 
-    await apiWithToken('/k/v1/record.json', 'POST', { app: LOG_APP, record: rec }, LOG_APP);
+    try {
+      await postLog(full);
+    } catch (e) {
+      console.error('[sda] writeLog 失敗（請確認 Log App ID / Token / 欄位代碼與類型是否正確），改用最小欄位重試', e);
+      // 最小保底：只寫三個必有的文字欄位，避開可能設錯的數值(LOG_APP)/USER_SELECT(LOG_USER)/分類欄位，
+      // 並把分類併入訊息，確保核心資訊不遺失。
+      const minimal = {
+        [LOG_FIELDS.event]:   text(trigger || (ev && ev.type)),
+        [LOG_FIELDS.result]:  text(result),
+        [LOG_FIELDS.message]: text(`[${category}] ${message}`),
+      };
+      try {
+        await postLog(minimal);
+      } catch (e2) {
+        console.error('[sda] writeLog 最小欄位重試仍失敗，本次未寫入 Log（請檢查 Log App 是否存在、Token 權限是否含「記錄追加」）', e2);
+      }
+    }
   };
 
   const uuid = () => (crypto && crypto.randomUUID
@@ -728,7 +787,7 @@
         if (rule.targetField && rule.action !== 'writeOther') touchedFields.push(rule.targetField);
       } catch (e) {
         console.error(`[sda] rule "${rule.label || rule.id}" failed`, e);
-        if (/submit|process/.test(trigger)) { event.error = friendlyError(e, rule.label || rule.id); return event; }
+        if (/submit|process/.test(trigger)) { recordError(event, e, rule.label || rule.id); return event; }
       }
     }
 
@@ -749,7 +808,7 @@
             try { await runWriteOther(rule, ctx); }
             catch (e) {
               console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
-              if (rule.onError === 'block' || !rule.onError) { event.error = friendlyError(e, rule.label || rule.id); return event; }
+              if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
             }
           }
           return;
@@ -760,7 +819,7 @@
         try { await runWriteOther(rule, ctx); }
         catch (e) {
           console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
-          if (rule.onError === 'block' || !rule.onError) { event.error = friendlyError(e, rule.label || rule.id); return event; }
+          if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
         }
       }
       return event;
@@ -771,7 +830,7 @@
         try { await runWriteOther(rule, ctx); }
         catch (e) {
           console.error(`[sda] cross-app rule "${rule.label || rule.id}" failed`, e);
-          if (rule.onError === 'block' || !rule.onError) { event.error = friendlyError(e, rule.label || rule.id); return event; }
+          if (rule.onError === 'block' || !rule.onError) { recordError(event, e, rule.label || rule.id); return event; }
         }
       }
     }
@@ -833,21 +892,23 @@
     } catch (err) {
       thrown = err;
       console.error('[sda]', err);
-      if (ev && ev.type) ev.error = friendlyError(err, 'Status-Driven Actions error');
+      if (ev && ev.type) recordError(ev, err, '');
       out = ev;
     }
     if (LOG_APP && (_runInfo.matched > 0 || thrown)) {
       const errored = !!(ev && ev.error);
+      const info = _runInfo.error;
+      // 失敗 → 寫原始技術訊息（含錯誤碼 + 規則名）；成功 → 寫命中的規則清單。
+      const category = errored ? (info ? info.category : 'system') : 'success';
+      const message = errored
+        ? (info
+            ? `[${info.code || 'no-code'}] ${info.rule ? '規則「' + info.rule + '」: ' : ''}${info.rawMessage}`
+            : String(ev.error))
+        : `已套用 ${_runInfo.matched} 條規則：${_runInfo.labels.join('、')}`;
       try {
-        await writeLog({
-          ev, trigger,
-          result: errored ? '失敗' : '成功',
-          message: errored
-            ? String(ev.error)
-            : `已套用 ${_runInfo.matched} 條規則：${_runInfo.labels.join('、')}`,
-        });
+        await writeLog({ ev, trigger, result: errored ? '失敗' : '成功', category, message });
       } catch (e) {
-        console.error('[sda] writeLog failed', e);
+        console.error('[sda] writeLog failed（請確認 Log App ID / Token / 欄位代碼是否正確）', e);
       }
     }
     return out;
