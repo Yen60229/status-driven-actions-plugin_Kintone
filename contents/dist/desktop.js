@@ -532,7 +532,6 @@
         break;
       case 'edit.show':
       case 'edit.submit':
-      case 'detail.show':
       default: {
         const cur = (record.$status && record.$status.value) || record['狀態']?.value || '';
         if (rule.statusCond && rule.statusCond !== '*' && rule.statusCond !== cur) return false;
