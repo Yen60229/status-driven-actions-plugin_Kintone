@@ -244,8 +244,13 @@
   const writeLog = async ({ ev, trigger, result, category, message }) => {
     if (!LOG_APP) return;
     const u = (kintone.getLoginUser && kintone.getLoginUser()) || {};
+    const recIdFromPage = () => {
+      const m = /[#&?]record(?:%3D|=)(\d+)/i.exec(window.location.href || '');
+      return m ? m[1] : '';
+    };
     const recId = (ev && ev.recordId) ||
-      (ev && ev.record && ev.record.$id && ev.record.$id.value) || '';
+      (ev && ev.record && ev.record.$id && ev.record.$id.value) ||
+      recIdFromPage() || '';
     const text = (v) => ({ value: String(v == null ? '' : v).slice(0, 60000) });
 
     const full = {
@@ -293,8 +298,10 @@
   };
 
   const recordIdFromUrl = (url) => {
-    const m = /record(?:%3D|=)(\d+)/i.exec(url || '');
-    return m ? m[1] : '';
+    const fromReq = /record(?:%3D|=)(\d+)/i.exec(url || '');
+    if (fromReq) return fromReq[1];
+    const fromPage = /[#&?]record(?:%3D|=)(\d+)/i.exec(window.location.href || '');
+    return fromPage ? fromPage[1] : '';
   };
 
   const logKintoneAction = async (url, status, bodyText) => {
