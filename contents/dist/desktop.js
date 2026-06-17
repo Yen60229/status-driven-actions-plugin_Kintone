@@ -936,6 +936,82 @@
     }
   };
 
+  // ===== 對外暴露：以 REST API 推進狀態時，補觸發 process.proceed 規則 =====
+  // 背景：App 自訂 JS 用 /k/v1/record/status 推進流程時，kintone 不會送出 process.proceed
+  //       事件，本外掛掛在 process.proceed 的規則（含簽核履歷 appendSubtable）因此不會執行。
+  //       呼叫此函式即可用「同一份規則」補建並寫入該筆 row，避免 App 端重複實作建 row 邏輯。
+  //
+  // 用法（建議在「API 推進成功之後」呼叫；nextStatus 省略時自動讀取記錄當下的狀態）：
+  //   await window.NXSdaProceed.run({
+  //     recordId: '123',
+  //     action:   '廠商代號登錄完成',                 // 對應 kintone 流程動作名稱
+  //     fromStatus: '總務部會計課經辦登錄廠商代號',     // 推進前狀態（供規則 fromStatus 比對）
+  //     // toStatus: '流程結束',                       // 可省略；省略時取記錄當下 狀態 值
+  //   });
+  //
+  // 回傳：{ matched: number, written: boolean }
+  // 注意：本表寫入會優先使用外掛設定的 selfAppToken（若有），可避開推進後使用者已無編輯權的問題。
+  const runProceedRulesViaApi = async ({ recordId, action = '', fromStatus = '', toStatus = '' } = {}) => {
+    if (!recordId) throw new Error('[sda] runProceedRulesViaApi: recordId 必填');
+    if (!CONFIG.rules || CONFIG.rules.length === 0) return { matched: 0, written: false };
+
+    const appId = getAppId();
+
+    // 1. 取最新整筆記錄（含完整子表，供 append 既有列 + 新列一起 PUT）
+    const getResp = await apiWithToken('/k/v1/record.json', 'GET', { app: appId, id: recordId }, appId);
+    const record = getResp.record;
+    if (!record) throw new Error(`[sda] runProceedRulesViaApi: 找不到記錄 ${recordId}`);
+
+    // 2. 組合擬真 process.proceed 事件（讓 resolveValue 的 actionName/currentStatus/nextStatus 正確）
+    const resolvedNext = toStatus || (record['狀態'] && record['狀態'].value) ||
+      (record.$status && record.$status.value) || '';
+    const event = {
+      type: 'app.record.detail.process.proceed',
+      record,
+      action: { value: action },
+      status: { value: fromStatus },
+      nextStatus: { value: resolvedNext },
+    };
+
+    // 3. 用既有比對邏輯找出命中的 process.proceed 規則
+    const matched = (CONFIG.rules || []).filter((r) =>
+      r.enabled !== false && triggerMatches(r, 'process.proceed') && statusMatches(r, event, record)
+    );
+    if (matched.length === 0) {
+      console.warn('[sda][runProceedRulesViaApi] 無命中 process.proceed 規則，未寫入', { action, fromStatus, toStatus: resolvedNext });
+      return { matched: 0, written: false };
+    }
+
+    const ctx = { event, record, trigger: 'process.proceed' };
+    const selfRules = matched.filter((r) => r.action !== 'writeOther');
+    const otherRules = matched.filter((r) => r.action === 'writeOther');
+
+    // 4. 跑本表規則（appendSubtable 會把新列 push 進 record[targetField].value）
+    const touchedFields = [];
+    for (const rule of selfRules) {
+      await runWriteSelf(rule, ctx);
+      if (rule.targetField) touchedFields.push(rule.targetField);
+    }
+
+    // 5. 把被改動的本表欄位（含 append 後的完整子表）PUT 回去
+    let written = false;
+    const uniqueFields = [...new Set(touchedFields)];
+    if (uniqueFields.length > 0) {
+      const changed = snapshotFields(record, uniqueFields);
+      await apiWithToken('/k/v1/record.json', 'PUT', { app: appId, id: recordId, record: changed }, appId);
+      written = true;
+    }
+
+    // 6. 跨 App 規則（如有）
+    for (const rule of otherRules) {
+      await runWriteOther(rule, ctx);
+    }
+
+    return { matched: matched.length, written };
+  };
+
+  window.NXSdaProceed = window.NXSdaProceed || { run: runProceedRulesViaApi };
+
   const E = (names) => names.flatMap((n) => [`app.record.${n}`, `mobile.app.record.${n}`]);
 
   kintone.events.on(E(['create.show']),
