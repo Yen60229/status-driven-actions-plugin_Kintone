@@ -1,0 +1,63 @@
+{
+  "_comment": "範本 03：① 核准時在子表格追加簽核記錄；② 根據申請日期計算到期日（dateShift）",
+  "_usage": "調整欄位代碼（subtableField / 子表格內欄位）和 dateShift 的 base.field / unit / amount",
+  "rules": [
+    {
+      "name": "任一核准動作 → 追加簽核記錄",
+      "enabled": true,
+      "trigger": "proceed",
+      "toStatus": "課長核准,部長核准,核准完了",
+      "fromStatus": "",
+      "actionName": "",
+      "statusCond": "",
+      "conditions": [],
+      "conditionLogic": "and",
+      "actions": [
+        {
+          "targetField": "簽核記錄",
+          "valueSource": "appendSubtable",
+          "valueParam": "{\"subtableField\":\"簽核記錄\",\"columns\":{\"簽核日期\":{\"valueSource\":\"today\"},\"簽核者\":{\"valueSource\":\"loginUser\"},\"簽核狀態\":{\"valueSource\":\"fixed\",\"valueParam\":\"核准\"},\"備註\":{\"valueSource\":\"fixed\",\"valueParam\":\"\"}}}"
+        }
+      ],
+      "writeOther": []
+    },
+    {
+      "name": "提出時 → 計算到期日（申請日 + 30 天）",
+      "enabled": true,
+      "trigger": "proceed",
+      "toStatus": "申請中",
+      "fromStatus": "",
+      "actionName": "",
+      "statusCond": "",
+      "conditions": [],
+      "conditionLogic": "and",
+      "actions": [
+        {
+          "targetField": "到期日",
+          "valueSource": "dateShift",
+          "valueParam": "{\"base\":{\"from\":\"field\",\"field\":\"申請日期\"},\"shifts\":[{\"amount\":{\"from\":\"fixed\",\"value\":30},\"unit\":\"day\"}],\"outputType\":\"DATE\"}"
+        }
+      ],
+      "writeOther": []
+    },
+    {
+      "name": "提出時 → 計算預計完成時間（申請日時 + 8 小時）",
+      "enabled": false,
+      "trigger": "proceed",
+      "toStatus": "申請中",
+      "fromStatus": "",
+      "actionName": "",
+      "statusCond": "",
+      "conditions": [],
+      "conditionLogic": "and",
+      "actions": [
+        {
+          "targetField": "預計完成時間",
+          "valueSource": "dateShift",
+          "valueParam": "{\"base\":{\"from\":\"field\",\"field\":\"申請日時\"},\"shifts\":[{\"amount\":{\"from\":\"fixed\",\"value\":8},\"unit\":\"hour\"}],\"outputType\":\"DATETIME\"}"
+        }
+      ],
+      "writeOther": []
+    }
+  ]
+}

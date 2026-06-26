@@ -1,0 +1,35 @@
+{
+  "_comment": "範本 02：流程結束時跨 App upsert（以訂單編號為 key，寫回主檔 App）",
+  "_usage": "使用前：① 將 appId 改為目標 App 實際 ID；② 將 tokenKey 改為設定畫面「跨 App Token」區塊填入的對應 key；③ 調整 keyMapping / fieldMapping 的欄位代碼",
+  "rules": [
+    {
+      "name": "完了 → 更新主檔 App 狀態",
+      "enabled": true,
+      "trigger": "proceed",
+      "toStatus": "完了",
+      "fromStatus": "",
+      "actionName": "",
+      "statusCond": "",
+      "conditions": [],
+      "conditionLogic": "and",
+      "actions": [],
+      "writeOther": [
+        {
+          "appId": "999",
+          "tokenKey": "master_app",
+          "mode": "upsert",
+          "keyMapping": [
+            { "srcField": "訂單編號", "destField": "訂單編號" }
+          ],
+          "fieldMapping": [
+            { "destField": "最新狀態",      "valueSource": "fixed",     "valueParam": "完了" },
+            { "destField": "最後更新日",     "valueSource": "today",     "valueParam": "" },
+            { "destField": "最後更新者",     "valueSource": "loginUser", "valueParam": "" },
+            { "destField": "來源記錄ID",     "valueSource": "fieldCopy", "valueParam": "$id" }
+          ],
+          "onError": "warn"
+        }
+      ]
+    }
+  ]
+}

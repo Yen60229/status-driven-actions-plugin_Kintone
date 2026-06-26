@@ -1,0 +1,64 @@
+{
+  "_comment": "範本 01：狀態變更時寫欄位值",
+  "_usage": "匯入方式：設定畫面 > 匯入設定，貼上此 JSON（不含 _comment/_usage 行亦可）",
+  "rules": [
+    {
+      "name": "核准完了 → 寫核准日期與核准人",
+      "enabled": true,
+      "trigger": "proceed",
+      "toStatus": "核准完了",
+      "fromStatus": "",
+      "actionName": "",
+      "statusCond": "",
+      "conditions": [],
+      "conditionLogic": "and",
+      "actions": [
+        {
+          "targetField": "核准日期",
+          "valueSource": "today",
+          "valueParam": ""
+        },
+        {
+          "targetField": "核准者",
+          "valueSource": "loginUser",
+          "valueParam": ""
+        },
+        {
+          "targetField": "核准狀態",
+          "valueSource": "fixed",
+          "valueParam": "已核准"
+        }
+      ],
+      "writeOther": []
+    },
+    {
+      "name": "退回 → 清空核准日期",
+      "enabled": true,
+      "trigger": "proceed",
+      "toStatus": "退回,已退回",
+      "fromStatus": "",
+      "actionName": "",
+      "statusCond": "",
+      "conditions": [],
+      "conditionLogic": "and",
+      "actions": [
+        {
+          "targetField": "核准日期",
+          "valueSource": "fixed",
+          "valueParam": ""
+        },
+        {
+          "targetField": "核准者",
+          "valueSource": "fixed",
+          "valueParam": ""
+        },
+        {
+          "targetField": "核准狀態",
+          "valueSource": "fixed",
+          "valueParam": "退回"
+        }
+      ],
+      "writeOther": []
+    }
+  ]
+}
