@@ -1,6 +1,7 @@
 (() => {
   'use strict';
 
+  const UI_VERSION = '1.7.3';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -127,46 +128,86 @@
   const searchableSelect = (options, currentValue, onChange) => {
     const wrap = el('div', { class: 'sda-ss-wrap' });
     let _val = currentValue;
+    let _shown = [];
+    let _items = [];
+    let _hi = -1;
 
     const findLabel = (v) => {
       const o = options.find((x) => x.v === v);
       return o ? o.l : (v || '');
     };
 
-    const inp = el('input', { type: 'text', class: 'sda-ss-input', autocomplete: 'off', placeholder: '🔍 搜尋或點選...' });
+    const inp = el('input', { type: 'text', class: 'sda-ss-input', autocomplete: 'off', placeholder: '🔍 打字搜尋欄位（↑↓ 選、Enter 確認）…' });
     inp.value = findLabel(_val);
 
     const list = el('div', { class: 'sda-ss-list' });
 
+    const commit = (o) => {
+      _val = o.v;
+      inp.value = o.l;
+      list.style.display = 'none';
+      onChange(o.v);
+    };
+
+    const refreshHi = () => {
+      _items.forEach((it, i) => it.classList.toggle('sda-ss-hi', i === _hi));
+      if (_items[_hi]) _items[_hi].scrollIntoView({ block: 'nearest' });
+    };
+
     const buildList = (filter) => {
       list.innerHTML = '';
-      const lf = (filter || '').toLowerCase();
-      const shown = lf
+      _items = [];
+      const lf = (filter || '').trim().toLowerCase();
+      _shown = lf
         ? options.filter((o) => o.l.toLowerCase().includes(lf) || o.v.toLowerCase().includes(lf))
         : options;
-      if (!shown.length) {
+      if (!_shown.length) {
         list.appendChild(el('div', { class: 'sda-ss-empty' }, ['無符合選項']));
+        _hi = -1;
       } else {
-        shown.forEach((o) => {
+        _shown.forEach((o, i) => {
           const item = el('div', { class: 'sda-ss-item' + (o.v === _val ? ' sda-ss-active' : '') }, [o.l]);
           item.title = o.l;
-          item.addEventListener('mousedown', (e) => {
-            e.preventDefault();
-            _val = o.v;
-            inp.value = o.l;
-            list.style.display = 'none';
-            onChange(o.v);
-          });
+          item.addEventListener('mousedown', (e) => { e.preventDefault(); commit(o); });
+          item.addEventListener('mousemove', () => { if (_hi !== i) { _hi = i; refreshHi(); } });
           list.appendChild(item);
+          _items.push(item);
         });
+        const activeIdx = _shown.findIndex((o) => o.v === _val);
+        _hi = lf ? 0 : (activeIdx >= 0 ? activeIdx : 0);
+        refreshHi();
       }
       list.style.display = 'block';
     };
 
-    inp.addEventListener('focus', () => { inp.select(); buildList(''); });
+    inp.addEventListener('focus', () => { inp.value = ''; buildList(''); });
     inp.addEventListener('input', (e) => buildList(e.target.value));
+    inp.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      if (list.style.display === 'none' && (e.key === 'ArrowDown' || e.key === 'ArrowUp')) {
+        buildList('');
+        return;
+      }
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          if (_shown.length) { _hi = Math.min(_hi + 1, _shown.length - 1); refreshHi(); }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (_shown.length) { _hi = Math.max(_hi - 1, 0); refreshHi(); }
+          break;
+        case 'Enter':
+          if (_shown[_hi]) { e.preventDefault(); commit(_shown[_hi]); inp.blur(); }
+          break;
+        case 'Escape':
+          list.style.display = 'none';
+          inp.value = findLabel(_val);
+          inp.blur();
+          break;
+      }
+    });
     inp.addEventListener('blur', () => {
-
       setTimeout(() => {
         list.style.display = 'none';
         inp.value = findLabel(_val);
@@ -175,6 +216,26 @@
 
     wrap.appendChild(inp);
     wrap.appendChild(list);
+    return wrap;
+  };
+
+  let _dlSeq = 0;
+  const fieldCombo = (options, currentValue, onChange) => {
+    const wrap = el('div', { class: 'sda-ss-wrap' });
+    const listId = 'sda-dl-' + (++_dlSeq);
+    const dl = el('datalist', { id: listId });
+    options.forEach((o) => {
+      if (!o.v) return;
+      dl.appendChild(el('option', { value: o.v }, [o.l]));
+    });
+    const inp = el('input', {
+      type: 'text', class: 'sda-ss-input', list: listId, autocomplete: 'off',
+      placeholder: '🔍 打字搜尋欄位名稱／代碼…',
+    });
+    inp.value = currentValue || '';
+    inp.addEventListener('change', () => onChange(inp.value.trim()));
+    wrap.appendChild(inp);
+    wrap.appendChild(dl);
     return wrap;
   };
 
@@ -365,8 +426,7 @@
         display: 'grid', gridTemplateColumns: '1fr 120px 1fr auto', gap: '5px', alignItems: 'center'
       }});
 
-      const fieldOpts = [{ v: '', l: '— 選擇欄位 —' }, ...FIELD_OPTIONS.slice(1)];
-      row.appendChild(searchableSelect(fieldOpts, cond.field, (v) => { r.conditions[ci].field = v; }));
+      row.appendChild(fieldCombo(FIELD_OPTIONS, cond.field, (v) => { r.conditions[ci].field = v; }));
 
       row.appendChild(select(COND_OPS, cond.op || 'eq', (v) => { r.conditions[ci].op = v; }));
 
@@ -391,14 +451,10 @@
 
   const renderRuleCard = (r, idx) => {
     const card = el('div', {
-      class: 'sda-rule-card',
-      style: {
-        border: '1px solid #d4d7d7', borderRadius: '4px', padding: '12px',
-        marginBottom: '12px', background: r.enabled === false ? '#f0f0f0' : '#fff'
-      }
+      class: 'sda-rule-card' + (r.enabled === false ? ' is-disabled' : '')
     });
 
-    const header = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '8px' } });
+    const header = el('div', { class: 'sda-rule-head' });
     header.appendChild(checkbox(r.enabled !== false, (v) => { r.enabled = v; render(); }, '啟用'));
     const labelI = textInput(r.label, (v) => { r.label = v; }, `規則 #${idx + 1} 顯示名稱`);
     labelI.style.flex = '1';
@@ -432,18 +488,18 @@
     const grid = el('div', { class: 'sda-rule-grid' });
 
     const addRow = (label, control) => {
-      grid.appendChild(el('div', { style: { color: '#555', fontSize: '12px' } }, [label]));
+      grid.appendChild(el('div', { class: 'sda-row-label' }, [label]));
       grid.appendChild(control);
     };
 
     addRow('觸發時機', select(TRIGGERS, r.trigger, (v) => { r.trigger = v; render(); }));
 
     if (r.trigger === 'process.proceed') {
-      addRow('從狀態 (fromStatus)', textInput(r.fromStatus, (v) => { r.fromStatus = v; }, '* 表示任意'));
-      addRow('到狀態 (toStatus)',   textInput(r.toStatus,   (v) => { r.toStatus = v; }, '* 表示任意'));
-      addRow('動作名稱 (actionName)', textInput(r.actionName, (v) => { r.actionName = v; }, '* 表示任意'));
+      addRow('從狀態 (fromStatus)', textInput(r.fromStatus, (v) => { r.fromStatus = v; }, '* 任意；多個用逗號，例 A,B'));
+      addRow('到狀態 (toStatus)',   textInput(r.toStatus,   (v) => { r.toStatus = v; }, '* 任意；多個用逗號，例 核准完了,B課核准'));
+      addRow('動作名稱 (actionName)', textInput(r.actionName, (v) => { r.actionName = v; }, '* 任意；多個用逗號'));
     } else if (r.trigger === 'edit.show' || r.trigger === 'edit.submit') {
-      addRow('當狀態 = ', textInput(r.statusCond, (v) => { r.statusCond = v; }, '* 表示任意'));
+      addRow('當狀態 = ', textInput(r.statusCond, (v) => { r.statusCond = v; }, '* 任意；多個用逗號，例 進行中,審核中'));
     } else {
       const note = el('div', { style: { color: '#888', fontSize: '12px' } }, ['（新增時無狀態，狀態條件忽略）']);
       addRow('狀態條件', note);
@@ -454,7 +510,7 @@
     addRow('動作', select(ACTIONS, r.action, (v) => { r.action = v; render(); }));
 
     if (r.action === 'writeSelf') {
-      addRow('目標欄位', searchableSelect(FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
+      addRow('目標欄位', fieldCombo(FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
       addRow('值的來源', searchableSelect(VALUE_SOURCES, r.valueSource, (v) => { r.valueSource = v; render(); }));
 
       const needsParam = ['fixed', 'fieldCopy', 'formula', 'lookup', 'dateShift', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
@@ -562,8 +618,12 @@
 
   const renderToolbar = () => {
     const bar = el('div', { class: 'sda-toolbar' });
-    const msg = el('span', { id: 'sda-msg', style: { marginRight: '12px', fontSize: '12px' } });
+    bar.appendChild(el('span', {
+      style: { fontSize: '12px', color: '#9aa3ad' }
+    }, [`設定畫面 v${UI_VERSION}`]));
+    const msg = el('span', { id: 'sda-msg', style: { fontSize: '13px' } });
     bar.appendChild(msg);
+    bar.appendChild(el('span', { class: 'sda-spacer' }));
     bar.appendChild(el('button', {
       class: 'sda-btn', onclick: exportConfig
     }, ['匯出設定']));

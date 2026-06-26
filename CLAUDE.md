@@ -83,15 +83,171 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 設定載入 | `PLUGIN_ID`、`TOKENS`、`SELF_TOKEN`、`LOG_APP`、`LOG_TOKEN` 由 `kintone.plugin.app.getConfig` 解析單一 JSON | B-4 |
 | 事件命名空間 | `APP_NS` / `MOBILE_NS`、`E([...])` 同時組電腦版與手機版事件名 | B-1 |
 | 核心套用 | `applyRules` / `process.proceed` 補償寫入（`pendingWrite` + `checkEditPermission`） | B-3 |
-| 值來源 | `valueSource` 一覽：`fixed`/`loginUser`/`today`/`fieldCopy`/`formula`/`lookup`/`subtableLastRow`/`appendSubtable`/`readonly`… | B-5、B-6 |
+| 值來源 | `valueSource` 一覽：`fixed`/`loginUser`/`today`/`fieldCopy`/`formula`/`lookup`/`dateShift`/`subtableLastRow`/`appendSubtable`/`readonly`… | B-5、B-6 |
+| 日期加減 | `dateShift`（`parseBaseDate`/`addPeriod`/`formatDateOut`/`computeDateShift`；可讀 `ctx.targetRecord`，v1.6.0） | B-6 |
 | 子表格履歷 | `appendSubtable` + `historyMode` | B-7 |
 | 執行 Log | `loggedApply`、`flushSubmitLog`、`writeLog`/`postLog`、`_runInfo`/`_pendingSubmitLog`（方案 A，v1.5.0） | B-8、B-8a、B-8b |
 | 錯誤分類 | `errorCodeOf`/`classifyError`/`friendlyError`/`recordError`（`session`/`permission`/`config`/`system`） | B-8a |
 | 寫入判別 | `classifyWrite`（userObject / arrayField / scalar） | B-9 |
 | 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
-| 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError） | B-11 |
+| 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
+| 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算） | B-11 |
+| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
 **先讀附錄 B 再動程式碼**——它是這份 runtime 的權威說明。
+
+---
+
+## 設定 JSON 結構（匯出／匯入；給「自動產生規則」用）
+
+> 這一節**自包含**，把它整段貼給另一個 session，它就能產出可直接從設定畫面「匯入設定」的 JSON。
+> 設定存放方式：整包設定是**單一 JSON 字串**，存在 `kintone.plugin.app.getConfig().data`。設定畫面用 `JSON.parse/JSON.stringify` 存取。
+
+### 匯入規則（重要）
+
+- 設定畫面的「**匯入設定**」**只套用 `rules`**，**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`（避免把來源 App 的 Token／App ID 誤帶過去）。
+- 因此自動產生時，**只要輸出 `rules`**即可。可給下列任一形狀：
+  - `{ "rules": [ ...規則... ] }`
+  - 或直接一個陣列 `[ ...規則... ]`
+- 欄位一律填 **kintone 欄位代碼（Field Code）**，不是顯示名稱。狀態名稱要與 kintone 流程設定**完全一致**（全形半形、空白都算）。
+
+### 整包 state 結構（匯出時的完整形狀，供參考）
+
+```jsonc
+{
+  "version": "1.0",
+  "selfAppToken": "",            // 本 App API Token（補償寫入用；匯入不覆蓋）
+  "tokens": [                     // 跨 App Token 對應表（匯入不覆蓋）
+    { "appId": "42", "appLabel": "客戶主檔", "token": "xx␣" }
+  ],
+  "logAppId": "",                 // 執行 Log App ID（匯入不覆蓋）
+  "logToken": "",                 // Log App Token（匯入不覆蓋）
+  "rules": [ /* Rule[]，見下 */ ]
+}
+```
+
+### Rule 物件
+
+```jsonc
+{
+  "id": "r-1700000000000",        // 選填，唯一字串即可
+  "label": "核准時寫核准日期",     // 選填，顯示名稱
+  "enabled": true,                // 選填，預設 true；false=停用不執行
+
+  "trigger": "process.proceed",   // 必填，見下方「trigger 與狀態條件」
+
+  // ── 狀態條件（依 trigger 擇一組）──
+  "fromStatus": "*",              // process.proceed：推進前狀態
+  "toStatus": "核准完了,B課核准",  // process.proceed：推進後狀態；逗號分隔=任一(v1.7.2)
+  "actionName": "*",              // process.proceed：動作（按鈕）名稱
+  "statusCond": "*",              // edit.show/edit.submit：當前狀態（逗號分隔=任一）
+
+  // ── 欄位條件（選填；全部成立才執行）──
+  "conditions": [
+    { "field": "申請類別", "op": "inList", "value": "變更,恢復" }
+  ],
+  "conditionLogic": "AND",        // 選填 AND(預設)/OR
+
+  // ── 動作 ──
+  "action": "writeSelf",          // writeSelf=寫本記錄 / writeOther=寫其他 App
+
+  // action=writeSelf 時：
+  "targetField": "核准日期",       // 目標欄位代碼
+  "valueSource": "today",         // 見「valueSource 一覽」
+  "valueParam": null,             // 依 valueSource，字串或物件
+  "skipIfFilled": true,           // 選填，僅在目標欄位空白時才寫
+  "appendMode": false,            // 選填，CHECK_BOX/多選 追加不覆蓋
+
+  // action=writeOther 時：
+  "writeMode": "update",          // create / update / upsert
+  "targetApp": "42",              // 目標 App ID
+  "keyMapping":  [ { "targetField": "客戶代號", "valueSource": "fieldCopy", "valueParam": "客戶代號" } ],
+  "fieldMapping":[ { "targetField": "最後出貨日", "valueSource": "today" } ],
+  "onError": "block"              // block(預設)/log/ignore
+}
+```
+
+`*`＝任意。`'*'` 或留空都視為不限制。
+
+### trigger 與狀態條件對應
+
+| `trigger` | 狀態欄位 | 說明 |
+|---|---|---|
+| `process.proceed` | `fromStatus` / `toStatus` / `actionName` | 流程推進時；最常用 |
+| `edit.show` / `edit.submit` | `statusCond` | 編輯載入／儲存前 |
+| `create.show` / `create.submit` | （無） | 新增時，記錄尚無狀態 |
+
+### valueSource 一覽（writeSelf 的 `valueParam`／writeOther 的 mapping 共用）
+
+| valueSource | valueParam | 說明 |
+|---|---|---|
+| `fixed` | 字串/數字 | 固定值 |
+| `loginUser` | — | 登入者（寫 USER_SELECT） |
+| `today` / `nowTime` / `now` | — | 今天(YYYY-MM-DD)／現在時刻(HH:mm)／現在日期時間(ISO) |
+| `recordNumber` / `recordId` / `appId` / `uuid` / `timestamp` | — | 記錄編號／$id／App ID／UUID／Unix ms |
+| `nextStatus` / `currentStatus` / `actionName` | — | 推進後狀態／推進前狀態／動作名稱（限 process.proceed） |
+| `fieldCopy` | `"來源欄位代碼"` | 複製本記錄某欄位 |
+| `formula` | `"{数量}*{単価}+10"` | 四則運算，欄位代碼用 `{}` 包；只允許數字/運算子（防注入） |
+| `lookup` | `{ app, keyField, keyExpr, returnField, onMiss }` | 跨 App 查一個值；`keyExpr` 內 `{欄位代碼}` 會代換；`onMiss`:`empty`(預設)/`error` |
+| `dateShift` | 見下 | 讀日期 ± 期間（v1.6.0） |
+| `subtableLastRow` | `{ table, field, row?, map?, onMiss? }` | 子表某列欄位值；`row`:`last`(預設)/`first`/數字/`all` |
+| `appendSubtable` | `{ subRules:[{targetField,valueSource,valueParam?}], historyMode? }` | 子表格新增一列（履歷） |
+| `clear` | — | 清空欄位 |
+| `readonly` | — | 隱藏鎖定欄位（僅 `*.show` 時機） |
+
+`dateShift` 的 `valueParam`：
+
+```jsonc
+{
+  "base":   { "from": "target", "field": "受付日" },  // from: this(本記錄)/target(目標App那筆,僅writeOther更新有效)/now/today
+  "amount": 30,                                         // 數字(可負) 或 { "from":"this"|"target", "field":"天數欄位" }
+  "unit":   "days",                                    // days/hours/minutes/months/years
+  "output": "date"                                     // date(YYYY-MM-DD)/datetime(ISO)/time(HH:mm)；省略=沿用 base 型別
+}
+```
+
+### conditions 的 `op`
+
+`eq`(預設,完全相等)／`neq`／`startsWith`／`contains`／`inList`（`value` 用逗號分隔，任一命中）。多值欄位（複選/使用者/組織/群組）會展開每個元素（取 `code` 與 `name`）比對。
+
+### 最小可匯入範例
+
+```json
+{
+  "rules": [
+    {
+      "label": "核准→寫核准日期與核准者",
+      "enabled": true,
+      "trigger": "process.proceed",
+      "fromStatus": "*",
+      "toStatus": "核准完了,B課核准",
+      "actionName": "*",
+      "action": "writeSelf",
+      "targetField": "核准日期",
+      "valueSource": "today",
+      "skipIfFilled": true
+    },
+    {
+      "label": "出貨→更新客戶主檔最後出貨日(受付日+30)",
+      "enabled": true,
+      "trigger": "process.proceed",
+      "toStatus": "已出貨",
+      "action": "writeOther",
+      "writeMode": "update",
+      "targetApp": "42",
+      "keyMapping":  [ { "targetField": "客戶代號", "valueSource": "fieldCopy", "valueParam": "客戶代號" } ],
+      "fieldMapping": [
+        { "targetField": "最後出貨日", "valueSource": "today" },
+        { "targetField": "保固到期日", "valueSource": "dateShift",
+          "valueParam": { "base": { "from": "target", "field": "受付日" }, "amount": 30, "unit": "days", "output": "date" } }
+      ],
+      "onError": "block"
+    }
+  ]
+}
+```
+
+> 產生規則時要請對方提供：**目標欄位代碼、狀態名稱、目標 App ID**（這些外掛無法自己推斷）。完整語意以 [README.md 附錄 B-5～B-11](README.md) 為準。
 
 ---
 

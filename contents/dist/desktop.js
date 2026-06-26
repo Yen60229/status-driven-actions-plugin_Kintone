@@ -589,6 +589,13 @@
 
   const triggerMatches = (rule, trigger) => rule.trigger === trigger;
 
+  const statusMatchesList = (spec, actual) => {
+    if (!spec) return true;
+    const list = String(spec).split(/[,，;；\n]/).map((s) => s.trim()).filter(Boolean);
+    if (!list.length || list.includes('*')) return true;
+    return list.includes(actual);
+  };
+
   const statusMatches = (rule, event, record) => {
 
     switch (rule.trigger) {
@@ -599,16 +606,16 @@
                      record['狀態']?.value || '';
         const next = (event.nextStatus && event.nextStatus.value) || '';
         const act  = (event.action && event.action.value) || '';
-        if (rule.fromStatus && rule.fromStatus !== '*' && cur !== '' && rule.fromStatus !== cur) {
+        if (cur !== '' && !statusMatchesList(rule.fromStatus, cur)) {
           return false;
         }
-        if (rule.fromStatus && rule.fromStatus !== '*' && cur === '') {
+        if (rule.fromStatus && String(rule.fromStatus).trim() !== '*' && cur === '') {
           console.warn(`[sda][statusMatches] ⚠ $status unavailable in event.record — fromStatus check skipped`);
         }
-        if (rule.toStatus && rule.toStatus !== '*' && rule.toStatus !== next) {
+        if (!statusMatchesList(rule.toStatus, next)) {
           return false;
         }
-        if (rule.actionName && rule.actionName !== '*' && rule.actionName !== act) {
+        if (!statusMatchesList(rule.actionName, act)) {
           return false;
         }
         break;
@@ -621,7 +628,7 @@
       case 'edit.submit':
       default: {
         const cur = (record.$status && record.$status.value) || record['狀態']?.value || '';
-        if (rule.statusCond && rule.statusCond !== '*' && rule.statusCond !== cur) return false;
+        if (!statusMatchesList(rule.statusCond, cur)) return false;
         break;
       }
     }
