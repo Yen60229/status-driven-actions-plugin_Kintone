@@ -363,6 +363,9 @@
       case 'lookup':
         _resolvedValue = await lookupAcrossApp(spec.valueParam || {}, record);
         break;
+      case 'dateShift':
+        _resolvedValue = computeDateShift(spec.valueParam || {}, ctx);
+        break;
       default:
         console.warn('[sda] unknown valueSource', spec.valueSource);
         return null;
@@ -402,6 +405,77 @@
     }
     return resp.records[0][returnField] && resp.records[0][returnField].value;
   };
+
+  const parseBaseDate = (val) => {
+    if (val == null || val === '') return null;
+    const s = String(val);
+    if (/^\d{4}-\d{2}-\d{2}$/.test(s)) {
+      const [y, m, d] = s.split('-').map(Number);
+      return { d: new Date(y, m - 1, d), kind: 'date' };
+    }
+    if (/^\d{1,2}:\d{2}/.test(s) && !s.includes('-')) {
+      const [hh, mm] = s.split(':').map(Number);
+      const t = new Date(); t.setHours(hh, mm, 0, 0);
+      return { d: t, kind: 'time' };
+    }
+    const dt = new Date(s);
+    return Number.isNaN(dt.getTime()) ? null : { d: dt, kind: 'datetime' };
+  };
+
+  const addPeriod = (date, amount, unit) => {
+    const n = Number(amount) || 0;
+    const r = new Date(date.getTime());
+    switch (unit) {
+      case 'minutes': r.setMinutes(r.getMinutes() + n); break;
+      case 'hours':   r.setHours(r.getHours() + n); break;
+      case 'months':  r.setMonth(r.getMonth() + n); break;
+      case 'years':   r.setFullYear(r.getFullYear() + n); break;
+      case 'days':
+      default:        r.setDate(r.getDate() + n); break;
+    }
+    return r;
+  };
+
+  const formatDateOut = (date, output) => {
+    switch (output) {
+      case 'datetime': return date.toISOString();
+      case 'time':     return toHHmm(date);
+      case 'date':
+      default:         return toISODate(date);
+    }
+  };
+
+  const computeDateShift = (params, ctx) => {
+    const p = params || {};
+    const base = p.base || {};
+    let baseVal;
+    if (base.from === 'now')        baseVal = new Date().toISOString();
+    else if (base.from === 'today') baseVal = toISODate(new Date());
+    else {
+      const rec = base.from === 'this' ? ctx.record : ctx.targetRecord;
+      if (!rec) return '';
+      const f = rec[base.field];
+      baseVal = f && f.value;
+    }
+    const parsed = parseBaseDate(baseVal);
+    if (!parsed) return '';
+
+    let amount = p.amount;
+    if (amount && typeof amount === 'object') {
+      const rec = amount.from === 'target' ? ctx.targetRecord : ctx.record;
+      const f = rec && rec[amount.field];
+      amount = f ? Number(f.value) : 0;
+    }
+    const shifted = addPeriod(parsed.d, amount, p.unit || 'days');
+    return formatDateOut(shifted, p.output || parsed.kind);
+  };
+
+  const dateShiftNeedsTarget = (m) =>
+    m && m.valueSource === 'dateShift' && m.valueParam &&
+    (((m.valueParam.base || {}).from === 'target') ||
+     (m.valueParam.amount && typeof m.valueParam.amount === 'object' && m.valueParam.amount.from === 'target'));
+
+  const ruleNeedsTargetRecord = (rule) => (rule.fieldMapping || []).some(dateShiftNeedsTarget);
 
   const classifyWrite = (existing, raw) => {
     if (raw && typeof raw === 'object' && raw.code && !Array.isArray(raw)) return 'userObject';
@@ -657,18 +731,22 @@
     }
   };
 
-  const runWriteOther = async (rule, ctx) => {
-    const app = rule.targetApp;
-    if (!app) throw new Error('writeOther: targetApp missing');
-
+  const buildOtherPayload = async (rule, ctx) => {
     const payload = {};
     for (const m of (rule.fieldMapping || [])) {
       const v = await resolveValue(m, ctx);
       payload[m.targetField] = { value: v == null ? '' : (typeof v === 'object' ? v : String(v)) };
     }
+    return payload;
+  };
+
+  const runWriteOther = async (rule, ctx) => {
+    const app = rule.targetApp;
+    if (!app) throw new Error('writeOther: targetApp missing');
 
     switch (rule.writeMode) {
       case 'create': {
+        const payload = await buildOtherPayload(rule, ctx);
         await apiWithToken('/k/v1/record.json', 'POST', { app, record: payload }, app);
         return;
       }
@@ -682,11 +760,17 @@
         if (!keyParts.length) throw new Error('writeOther: keyMapping required for update/upsert');
         const query = `${keyParts.join(' and ')} limit 1`;
 
-        const found = await apiWithToken('/k/v1/records.json', 'GET', { app, query, fields: ['$id'] }, app);
+        const getOpts = { app, query };
+        if (!ruleNeedsTargetRecord(rule)) getOpts.fields = ['$id'];
+        const found = await apiWithToken('/k/v1/records.json', 'GET', getOpts, app);
+
         if (found.records && found.records.length) {
-          const id = found.records[0].$id.value;
+          const targetRecord = found.records[0];
+          const id = targetRecord.$id.value;
+          const payload = await buildOtherPayload(rule, { ...ctx, targetRecord });
           await apiWithToken('/k/v1/record.json', 'PUT', { app, id, record: payload }, app);
         } else if (rule.writeMode === 'upsert') {
+          const payload = await buildOtherPayload(rule, ctx);
           await apiWithToken('/k/v1/record.json', 'POST', { app, record: payload }, app);
         } else {
           throw new Error(`writeOther: no record found for ${query}`);

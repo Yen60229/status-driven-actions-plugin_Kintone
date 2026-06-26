@@ -1,6 +1,6 @@
 # 狀態驅動動作外掛 — 使用說明書
 
-> 適用版本：v1.5.0　　最後更新：2026-06-15
+> 適用版本：v1.7.0　　最後更新：2026-06-26
 >
 > 💡 程式碼（`desktop.js` / `mobile.js` / `config.js`）已移除全部註解，所有技術說明集中在本文件「**附錄 B：技術說明（開發者參考）**」。
 
@@ -219,6 +219,7 @@
 | **流程動作名稱** | 按下的那顆按鈕名稱（如「核准」） | 文字 |
 | **從本記錄欄位複製** | 把另一個欄位的值複製過來 | 同型別欄位 |
 | **簡易計算式** | 用欄位做四則運算 | 數字 |
+| **日期加減期間** | 讀一個日期，加/減 N 天・時・分・月・年，算出新日期 | 日期、日期時間、時間 |
 | **清空** | 把欄位清成空白 | 全部 |
 | **唯讀鎖定** | 隱藏欄位讓使用者無法編輯 | 全部（限「載入時」觸發） |
 | **Append 子表一筆** | 在子表格新增一列履歷記錄 | 子表格 |
@@ -232,6 +233,7 @@
 | 固定值 | 要填入的文字或數字 | `已完成` |
 | 從本記錄欄位複製 | 來源欄位的**欄位代碼** | `客戶代號` |
 | 簡易計算式 | 計算公式，欄位代碼用 `{}` 包起來 | `{数量}*{単価}` |
+| 日期加減期間 | JSON 格式（見第 6 節範例 E） | — |
 | Append 子表一筆 | JSON 格式（見第 6 節範例） | — |
 
 > **欄位代碼在哪裡找？**
@@ -356,6 +358,51 @@
 
 ---
 
+### 範例 E：讀取目標 App 的日期，加一段期間後寫回目標 App（v1.6.0）
+
+情境：流程推進時，到客戶主檔 App 找到對應記錄，讀它現有的「受付日」，**加 30 天**算出「到期日」，再寫回客戶主檔的同一筆記錄。
+
+| 設定項目 | 填入值 |
+|---|---|
+| 觸發時機 | 流程推進時 |
+| 到狀態 | `受理完了` |
+| 動作 | 寫入其他 App 記錄 |
+| 寫入模式 | 更新（依 key 找） |
+| 目標 App ID | `42`（客戶主檔） |
+| Key 對應 | `[{"targetField":"客戶代號","valueSource":"fieldCopy","valueParam":"客戶代號"}]` |
+| 欄位對應 | （填入以下 JSON） |
+
+```json
+[
+  {
+    "targetField": "到期日",
+    "valueSource": "dateShift",
+    "valueParam": {
+      "base":   { "from": "target", "field": "受付日" },
+      "amount": 30,
+      "unit":   "days",
+      "output": "date"
+    }
+  }
+]
+```
+
+**`valueParam` 各欄位說明：**
+
+| 欄位 | 說明 |
+|---|---|
+| `base.from` | 基準日期從哪讀：`target`＝目標 App 找到的那筆記錄、`this`＝本記錄、`now`／`today`＝執行當下（`now`/`today` 免填 `field`） |
+| `base.field` | 基準日期的欄位代碼（日期 / 日期時間 / 時間欄位） |
+| `amount` | 要加減的量。**數字可正可負**（負數＝往前推）；也可填 `{ "from": "this"\|"target", "field": "天數欄位" }` 從某個數字欄位讀 |
+| `unit` | 期間單位：`days`／`hours`／`minutes`／`months`／`years` |
+| `output` | 輸出格式：`date`（YYYY-MM-DD）／`datetime`（日期時間）／`time`（HH:mm）。省略＝沿用基準日期的型別 |
+
+> 💡 **要從目標 App 讀**（`base.from: "target"`）只在「**寫入其他 App** + 更新／Upsert 且有找到記錄」時有效——外掛會先抓到那筆記錄，才有它的欄位值可算。Upsert 找不到而改新增時，沒有現成記錄可讀，`target` 會得到空值。
+>
+> 💡 也可用在「**寫入本記錄欄位**」：把 `base.from` 設成 `this` 或 `now`，例如本記錄「受付日 + 14 天 → 回覆期限」。
+
+---
+
 ## 7. 更新外掛版本
 
 > 工程師修改程式後會提供新的 `plugin.zip`。請按以下步驟更新。
@@ -377,6 +424,36 @@
 3. 點右上角「**更新 App**」
 
 > ✅ 更新 App 後，新版本的功能立即生效。
+
+---
+
+## 7-2. 複製設定到其他 App（匯出 / 匯入，v1.7.0）
+
+> 想把 A App 設好的規則搬到 B App，不用一條一條重打。
+
+設定頁最下方工具列有「**匯出設定**」「**匯入設定**」兩顆按鈕。
+
+### 匯出（在來源 App）
+
+1. 進入來源 App 的外掛設定頁
+2. 點「**匯出設定**」→ 整包設定會**自動複製到剪貼簿**，同時跳出視窗顯示 JSON
+3. （若瀏覽器擋了自動複製，就在視窗裡全選那段 JSON 手動複製）
+
+### 匯入（在目標 App）
+
+1. 進入目標 App 的外掛設定頁
+2. 點「**匯入設定**」→ 把剛才複製的 JSON 貼進視窗 → 按「**套用規則**」
+3. 確認提示 → 規則會**取代**目標 App 目前的規則
+4. **檢查無誤後按「儲存」→「更新 App」** 才會生效
+
+### ⚠️ 匯入只會帶「規則」，這兩件事要自己確認
+
+| 項目 | 為什麼 | 要做什麼 |
+|---|---|---|
+| **API Token** | Token 綁在各自的 App，不能跨 App 共用 | 匯入**不會**動目標 App 的 Token／Log 設定；請依第 3、9 節在目標 App 自行填 |
+| **欄位代碼** | 規則寫的是欄位代碼，目標 App 必須有同名欄位 | 確認規則用到的欄位代碼在目標 App 都存在（附錄 A） |
+
+> 💡 之所以「只帶規則、不帶 Token」，就是為了避免把來源 App 的 Token／目標 App ID 誤套到別的 App 造成寫錯地方。Token 類設定一律在各 App 自己填一次最安全。
 
 ---
 
@@ -548,6 +625,12 @@
 
 - **`formula`**：如 `{数量}*{単価}+10`，欄位代碼用 `{}` 包；陣列欄位代換成長度。安全防護：代換後只允許 `數字 + - * / ( ) . 空白 " \ , 字母底線`，否則丟錯（防注入）。
 - **`lookup`**：`{ app, keyField, keyExpr, returnField, onMiss: 'empty'|'error' }`。`keyExpr` 內 `{欄位代碼}` 會被代換。走 `kintone.api`（使用者 session 權限）。
+- **`dateShift`**（v1.6.0，日期加減期間）：`{ base, amount, unit, output }`。
+  - `base`：`{ from: 'this'|'target'|'now'|'today', field? }`。`from='target'` 讀 `ctx.targetRecord`（僅 `writeOther` 更新／Upsert 命中時存在，見 B-11）；`from='this'` 讀本記錄；`now`/`today` 取本機時鐘。
+  - `amount`：數字（可負）；或 `{ from: 'this'|'target', field }` 從欄位讀數字。
+  - `unit`：`days`／`hours`／`minutes`／`months`／`years`（`months`/`years` 用 `setMonth`/`setFullYear`，月底進位採 JS 原生行為，如 1/31 + 1 月 = 3/3）。
+  - `output`：`date`(YYYY-MM-DD)／`datetime`(`toISOString()` 給 DATETIME 欄)／`time`(HH:mm)；省略＝沿用基準日期型別。
+  - 解析：`parseBaseDate` 依字串形狀判別 DATE／TIME／DATETIME；無法解析（空值/壞值）回 `''`。`now` 取 UTC ISO、`today` 取本機日期；`date`/`time` 輸出用本機時區（`toISODate`/`toHHmm`），故 DATETIME→date 會以本機日界裁切。
 - **`subtableLastRow`**：`{ table, field, row?, map?, onMiss? }`
   - `row`：省略/`'last'`＝最後一列；`'first'`＝第一列；數字 N＝第 N 列（0 起算，負數從尾端）；`'all'`＝掃整欄、收集所有非空去重值（回傳陣列，適合一次勾多個 CHECK_BOX）。
   - `map`：`{ "來源值": "目標選項名" }` 對照轉換；`onMiss`：`'raw'`（預設，用原值）/`'empty'`（略過）/其它字串（當固定替代值）。
@@ -598,13 +681,21 @@
 
 ### B-11. 寫入其他 App（writeOther）
 
-`writeMode`：`create`/`update`/`upsert`。`update`/`upsert` 需 `keyMapping`（組 query 找 `$id`）；`fieldMapping` 為要寫入的欄位。`onError`：`block`（預設，擋下提交）/`log`/`ignore`。
+`writeMode`：`create`/`update`/`upsert`。`update`/`upsert` 需 `keyMapping`（組 query 找 `$id`）；`fieldMapping` 為要寫入的欄位（由 `buildOtherPayload` 逐筆 `resolveValue` 組成）。`onError`：`block`（預設，擋下提交）/`log`/`ignore`。
+
+**讀目標記錄回算（v1.6.0）**：`fieldMapping` 內若有 `dateShift` 且 `base.from`（或 `amount.from`）為 `target`，`ruleNeedsTargetRecord` 會回 `true`，此時 GET 找記錄**不加 `fields:['$id']` 限制**（抓整筆），把 `found.records[0]` 以 `ctx.targetRecord` 傳進 `buildOtherPayload`，讓 `dateShift` 能讀目標 App 現有欄位值；否則維持只抓 `$id`。Upsert 找不到改用 `create` 新增時無 `targetRecord`，`from='target'` 得空值。
 
 ### B-12. 安全性注意事項
 
 - **絕不可 `console.log` 原始 config**：`rawConfig.data` 內含 API Token，會洩漏給所有開 DevTools 的使用者。
 - `formula` 採白名單字元檢查再 `Function(...)` 執行，避免任意程式碼注入。
 - `CB_AU01`（cybozu session 逾時）會轉成中文友善訊息，取代原始的英文 "Please login."。
+
+### B-12a. 匯出 / 匯入設定（v1.7.0，僅 config.js）
+
+- 設定頁工具列加 `exportConfig` / `importConfig` 兩鈕（皆呼叫 `openTextModal` 自製覆蓋層 modal，內含 readonly/可編輯 `textarea`，不依賴 `prompt`）。
+- **匯出**：`JSON.stringify(state, null, 2)` → `navigator.clipboard.writeText`（失敗則退回手動全選複製），同時開 readonly modal 顯示。內容**含 API Token**（與 B-12「不可 `console.log` config」同等敏感，匯出檔請當機密處理）。
+- **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules），`confirm` 後 `state.rules = rules` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。匯入後僅改記憶體 `state`，按「儲存」才 `setConfig` 落地。
 
 ### B-13. 重新打包
 

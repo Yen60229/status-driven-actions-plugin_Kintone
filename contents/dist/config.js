@@ -42,6 +42,7 @@
     { v: 'subtableLastRow', l: '子表某列欄位值（預設最後一列）[參數: JSON]' },
     { v: 'formula',        l: '簡易計算式 [參數: 例 {qty}*{price}+10]' },
     { v: 'lookup',         l: '跨 App 查詢 [參數: JSON]' },
+    { v: 'dateShift',      l: '日期加減期間 [參數: JSON]' },
     { v: 'nextStatus',     l: '下一狀態 (process.proceed)' },
     { v: 'currentStatus',  l: '當前狀態' },
     { v: 'actionName',     l: '流程動作名稱' },
@@ -195,10 +196,10 @@
 
   const render = () => {
     root.innerHTML = '';
+    root.appendChild(renderToolbar());
     root.appendChild(renderTokensSection());
     root.appendChild(renderRulesSection());
     root.appendChild(renderLogSection());
-    root.appendChild(renderToolbar());
   };
 
   const renderLogSection = () => {
@@ -456,11 +457,12 @@
       addRow('目標欄位', searchableSelect(FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
       addRow('值的來源', searchableSelect(VALUE_SOURCES, r.valueSource, (v) => { r.valueSource = v; render(); }));
 
-      const needsParam = ['fixed', 'fieldCopy', 'formula', 'lookup', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
+      const needsParam = ['fixed', 'fieldCopy', 'formula', 'lookup', 'dateShift', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
       if (needsParam) {
-        const isJson = ['lookup', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
+        const isJson = ['lookup', 'dateShift', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
         const jsonPlaceholder = {
           lookup:         '{ "app": "456", "keyField": "客戶代碼", "keyExpr": "{客戶代碼}", "returnField": "聯絡電話", "onMiss": "empty" }',
+          dateShift:      '{ "base": { "from": "this", "field": "受付日" }, "amount": 30, "unit": "days", "output": "date" }\n// base.from: "this"=本記錄, "target"=目標App那筆, "now"/"today"=執行當下\n// amount: 數字(可負); 或 { "from":"this"|"target", "field":"天數欄位" }\n// unit: days|hours|minutes|months|years   output: date|datetime|time',
           appendSubtable: '{ "subRules": [ { "targetField": "履歷_狀態", "valueSource": "nextStatus" }, { "targetField": "履歷_時間", "valueSource": "now" } ] }',
           subtableLastRow: '{ "table": "A", "field": "a1", "row": "all" }\n// row: "all"=掃整欄(多勾), "last"=最後一列, "first"=第一列\n// map: { "來源值": "選項名" }  onMiss: "raw"|"empty"',
         }[r.valueSource] || '';
@@ -489,10 +491,85 @@
     return card;
   };
 
+  const openTextModal = ({ title, value = '', readonly = false, confirmLabel, onConfirm }) => {
+    const overlay = el('div', { style: {
+      position: 'fixed', top: '0', left: '0', right: '0', bottom: '0',
+      background: 'rgba(0,0,0,0.4)', display: 'flex', alignItems: 'center',
+      justifyContent: 'center', zIndex: '9999',
+    } });
+    const box = el('div', { style: {
+      background: '#fff', padding: '16px', borderRadius: '6px',
+      width: 'min(680px, 90vw)', boxShadow: '0 4px 24px rgba(0,0,0,0.3)',
+    } });
+    box.appendChild(el('h3', { style: { margin: '0 0 8px', fontSize: '15px' } }, [title]));
+    const ta = el('textarea', { style: {
+      width: '100%', height: '320px', fontFamily: 'monospace', fontSize: '12px', boxSizing: 'border-box',
+    } });
+    ta.value = value;
+    if (readonly) ta.readOnly = true;
+    box.appendChild(ta);
+    const btnRow = el('div', { style: { marginTop: '12px', textAlign: 'right' } });
+    const close = () => document.body.removeChild(overlay);
+    btnRow.appendChild(el('button', { class: 'sda-btn', style: { marginRight: '8px' }, onclick: close }, ['關閉']));
+    if (onConfirm) {
+      btnRow.appendChild(el('button', {
+        class: 'sda-btn sda-btn-primary',
+        onclick: () => { if (onConfirm(ta.value) !== false) close(); },
+      }, [confirmLabel || '確定']));
+    }
+    box.appendChild(btnRow);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    ta.focus();
+    if (readonly) ta.select();
+  };
+
+  const exportConfig = () => {
+    const json = JSON.stringify(state, null, 2);
+    const show = (copied) => openTextModal({
+      title: copied
+        ? '已複製到剪貼簿，可到另一個 App 的外掛設定頁按「匯入設定」貼上'
+        : '請手動全選複製以下設定，再到另一個 App 匯入',
+      value: json, readonly: true,
+    });
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(json).then(() => show(true)).catch(() => show(false));
+    } else {
+      show(false);
+    }
+  };
+
+  const importConfig = () => {
+    openTextModal({
+      title: '貼上從其他 App 匯出的設定 JSON（只會套用「規則」，本 App 的 Token／Log 設定保留不變）',
+      value: '', confirmLabel: '套用規則',
+      onConfirm: (text) => {
+        let parsed;
+        try { parsed = JSON.parse(text); }
+        catch { alert('JSON 格式錯誤，請確認貼上的內容完整。'); return false; }
+        const rules = Array.isArray(parsed.rules) ? parsed.rules
+          : (Array.isArray(parsed) ? parsed : null);
+        if (!rules) { alert('找不到 rules，請確認這是本外掛匯出的設定。'); return false; }
+        if (!confirm(`將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）\n確定要套用嗎？`)) return false;
+        state.rules = rules;
+        render();
+        const msg = document.getElementById('sda-msg');
+        if (msg) { msg.className = ''; msg.textContent = `已匯入 ${rules.length} 條規則，確認後請按「儲存」。`; }
+        alert('規則已匯入。\n\n請務必確認：\n1. 規則用到的欄位代碼在本 App 都存在\n2. Token／目標 App ID 是否需要重新設定\n\n確認無誤後按「儲存」才會生效。');
+      },
+    });
+  };
+
   const renderToolbar = () => {
     const bar = el('div', { class: 'sda-toolbar' });
     const msg = el('span', { id: 'sda-msg', style: { marginRight: '12px', fontSize: '12px' } });
     bar.appendChild(msg);
+    bar.appendChild(el('button', {
+      class: 'sda-btn', onclick: exportConfig
+    }, ['匯出設定']));
+    bar.appendChild(el('button', {
+      class: 'sda-btn', onclick: importConfig
+    }, ['匯入設定']));
     bar.appendChild(el('button', {
       class: 'sda-btn', onclick: () => { history.back(); }
     }, ['取消']));
