@@ -741,6 +741,7 @@
   const buildOtherPayload = async (rule, ctx) => {
     const payload = {};
     const errs = [];
+    const suspects = [];
     for (const m of (rule.fieldMapping || [])) {
       let v;
       try {
@@ -749,10 +750,13 @@
         errs.push(`「${m.targetField}」值計算失敗: ${e.message}`);
         continue;
       }
+      if (m.valueSource === 'dateShift' && (v === '' || v == null)) {
+        suspects.push(`「${m.targetField}」（dateShift 找不到基準日期或計算失敗，請確認來源欄位代碼與資料格式）`);
+      }
       payload[m.targetField] = { value: v == null ? '' : (typeof v === 'object' ? v : String(v)) };
     }
     if (errs.length) throw new Error(errs.join('; '));
-    return payload;
+    return { payload, suspects };
   };
 
   const badFieldsFromError = (err) => {
@@ -774,12 +778,13 @@
     return out;
   };
 
-  const apiWrite = async (method, body, app, payload) => {
+  const apiWrite = async (method, body, app, suspects) => {
     try {
       return await apiWithToken(`/k/v1/record.json`, method, body, app);
     } catch (e) {
       const bad = badFieldsFromError(e);
       if (bad.length) throw new Error(`${e.message} → 問題欄位: ${bad.join('、')}`);
+      if (suspects && suspects.length) throw new Error(`${e.message} → 可疑欄位: ${suspects.join('、')}`);
       throw e;
     }
   };
@@ -790,8 +795,8 @@
 
     switch (rule.writeMode) {
       case 'create': {
-        const payload = await buildOtherPayload(rule, ctx);
-        await apiWrite('POST', { app, record: payload }, app, payload);
+        const { payload, suspects } = await buildOtherPayload(rule, ctx);
+        await apiWrite('POST', { app, record: payload }, app, suspects);
         return;
       }
       case 'update':
@@ -811,11 +816,11 @@
         if (found.records && found.records.length) {
           const targetRecord = found.records[0];
           const id = targetRecord.$id.value;
-          const payload = await buildOtherPayload(rule, { ...ctx, targetRecord });
-          await apiWrite('PUT', { app, id, record: payload }, app, payload);
+          const { payload, suspects } = await buildOtherPayload(rule, { ...ctx, targetRecord });
+          await apiWrite('PUT', { app, id, record: payload }, app, suspects);
         } else if (rule.writeMode === 'upsert') {
-          const payload = await buildOtherPayload(rule, ctx);
-          await apiWrite('POST', { app, record: payload }, app, payload);
+          const { payload, suspects } = await buildOtherPayload(rule, ctx);
+          await apiWrite('POST', { app, record: payload }, app, suspects);
         } else {
           throw new Error(`writeOther: no record found for ${query}`);
         }
