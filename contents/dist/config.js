@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.7.3';
+  const UI_VERSION = '1.7.5';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -518,7 +518,7 @@
         const isJson = ['lookup', 'dateShift', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
         const jsonPlaceholder = {
           lookup:         '{ "app": "456", "keyField": "客戶代碼", "keyExpr": "{客戶代碼}", "returnField": "聯絡電話", "onMiss": "empty" }',
-          dateShift:      '{ "base": { "from": "this", "field": "受付日" }, "amount": 30, "unit": "days", "output": "date" }\n// base.from: "this"=本記錄, "target"=目標App那筆, "now"/"today"=執行當下\n// amount: 數字(可負); 或 { "from":"this"|"target", "field":"天數欄位" }\n// unit: days|hours|minutes|months|years   output: date|datetime|time',
+          dateShift:      '{ "base": { "from": "this", "field": "申請日期" }, "amount": 30, "unit": "days", "output": "date" }\n// base.from: "this"=本記錄, "target"=目標App那筆, "now"/"today"=執行當下\n// amount: 數字(可負); 或 { "from":"this"|"target", "field":"天數欄位" }\n// unit: days|hours|minutes|months|years   output: date|datetime|time',
           appendSubtable: '{ "subRules": [ { "targetField": "履歷_狀態", "valueSource": "nextStatus" }, { "targetField": "履歷_時間", "valueSource": "now" } ] }',
           subtableLastRow: '{ "table": "A", "field": "a1", "row": "all" }\n// row: "all"=掃整欄(多勾), "last"=最後一列, "first"=第一列\n// map: { "來源值": "選項名" }  onMiss: "raw"|"empty"',
         }[r.valueSource] || '';

@@ -199,7 +199,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ```jsonc
 {
-  "base":   { "from": "target", "field": "受付日" },  // from: this(本記錄)/target(目標App那筆,僅writeOther更新有效)/now/today
+  "base":   { "from": "target", "field": "申請日期" },  // from: this(本記錄)/target(目標App那筆,僅writeOther更新有效)/now/today
   "amount": 30,                                         // 數字(可負) 或 { "from":"this"|"target", "field":"天數欄位" }
   "unit":   "days",                                    // days/hours/minutes/months/years
   "output": "date"                                     // date(YYYY-MM-DD)/datetime(ISO)/time(HH:mm)；省略=沿用 base 型別
@@ -228,7 +228,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
       "skipIfFilled": true
     },
     {
-      "label": "出貨→更新客戶主檔最後出貨日(受付日+30)",
+      "label": "出貨→更新客戶主檔最後出貨日(申請日期+30)",
       "enabled": true,
       "trigger": "process.proceed",
       "toStatus": "已出貨",
@@ -239,7 +239,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
       "fieldMapping": [
         { "targetField": "最後出貨日", "valueSource": "today" },
         { "targetField": "保固到期日", "valueSource": "dateShift",
-          "valueParam": { "base": { "from": "target", "field": "受付日" }, "amount": 30, "unit": "days", "output": "date" } }
+          "valueParam": { "base": { "from": "target", "field": "申請日期" }, "amount": 30, "unit": "days", "output": "date" } }
       ],
       "onError": "block"
     }
