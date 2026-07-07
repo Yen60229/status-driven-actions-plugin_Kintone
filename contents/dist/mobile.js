@@ -743,6 +743,10 @@
     const errs = [];
     const suspects = [];
     for (const m of (rule.fieldMapping || [])) {
+      if (m.valueSource === 'fieldCopy' && ctx.record && !(m.valueParam in ctx.record)) {
+        suspects.push(`「${m.targetField}」（來源欄位代碼「${m.valueParam}」在本記錄找不到，請確認是否打錯字）`);
+      }
+
       let v;
       try {
         v = await resolveValue(m, ctx);
