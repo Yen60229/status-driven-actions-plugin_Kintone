@@ -740,11 +740,28 @@
 
   const buildOtherPayload = async (rule, ctx) => {
     const payload = {};
+    const errs = [];
     for (const m of (rule.fieldMapping || [])) {
-      const v = await resolveValue(m, ctx);
+      let v;
+      try {
+        v = await resolveValue(m, ctx);
+      } catch (e) {
+        errs.push(`「${m.targetField}」值計算失敗: ${e.message}`);
+        continue;
+      }
       payload[m.targetField] = { value: v == null ? '' : (typeof v === 'object' ? v : String(v)) };
     }
+    if (errs.length) throw new Error(errs.join('; '));
     return payload;
+  };
+
+  const apiWrite = async (method, body, app, payload) => {
+    try {
+      return await apiWithToken(`/k/v1/record.json`, method, body, app);
+    } catch (e) {
+      const fields = Object.keys(payload || {}).join(', ');
+      throw new Error(`${e.message}${fields ? ` (寫入欄位: ${fields})` : ''}`);
+    }
   };
 
   const runWriteOther = async (rule, ctx) => {
@@ -754,7 +771,7 @@
     switch (rule.writeMode) {
       case 'create': {
         const payload = await buildOtherPayload(rule, ctx);
-        await apiWithToken('/k/v1/record.json', 'POST', { app, record: payload }, app);
+        await apiWrite('POST', { app, record: payload }, app, payload);
         return;
       }
       case 'update':
@@ -775,10 +792,10 @@
           const targetRecord = found.records[0];
           const id = targetRecord.$id.value;
           const payload = await buildOtherPayload(rule, { ...ctx, targetRecord });
-          await apiWithToken('/k/v1/record.json', 'PUT', { app, id, record: payload }, app);
+          await apiWrite('PUT', { app, id, record: payload }, app, payload);
         } else if (rule.writeMode === 'upsert') {
           const payload = await buildOtherPayload(rule, ctx);
-          await apiWithToken('/k/v1/record.json', 'POST', { app, record: payload }, app);
+          await apiWrite('POST', { app, record: payload }, app, payload);
         } else {
           throw new Error(`writeOther: no record found for ${query}`);
         }
