@@ -8,6 +8,13 @@ param([string]$Version = '')
 $ErrorActionPreference = 'Stop'
 Set-Location $PSScriptRoot
 
+# Read version from manifest.json via regex (avoids CP950 JSON parse issues on PS5.1)
+function Get-ManifestVersion {
+    $raw = Get-Content contents\manifest.json -Raw -Encoding utf8
+    if ($raw -match '"version":\s*"([^"]+)"') { return $Matches[1] }
+    return 'unknown'
+}
+
 Write-Host ""
 Write-Host "=== Status-Driven Actions Plugin Build ===" -ForegroundColor Cyan
 
@@ -35,7 +42,7 @@ if ($Version) {
 
     Write-Host "[2/4] Version bumped to $Version" -ForegroundColor Green
 } else {
-    $currentVer = ((Get-Content contents\manifest.json -Raw) | ConvertFrom-Json).version
+    $currentVer = Get-ManifestVersion
     Write-Host "[2/4] Version unchanged: $currentVer" -ForegroundColor Gray
 }
 
@@ -47,7 +54,7 @@ if (-not $ppk) {
 Write-Host "[3/4] Using key: $($ppk.Name)" -ForegroundColor Green
 
 # 4. Pack
-$ver = ((Get-Content contents\manifest.json -Raw) | ConvertFrom-Json).version
+$ver = Get-ManifestVersion
 $out = "plugin_v$ver.zip"
 
 Write-Host "[4/4] Packing..." -ForegroundColor Cyan
