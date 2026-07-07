@@ -91,8 +91,8 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 寫入判別 | `classifyWrite`（userObject / arrayField / scalar） | B-9 |
 | 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
 | 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
-| 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算） | B-11 |
-| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
+| 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算）；`buildOtherPayload` 回傳 `{payload,suspects}`，`fieldCopy` 來源欄位不存在／`dateShift` 空值時標記可疑；`badFieldsFromError` 解析 kintone `errors` 指名欄位 | B-11 |
+| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
 **先讀附錄 B 再動程式碼**——它是這份 runtime 的權威說明。
 

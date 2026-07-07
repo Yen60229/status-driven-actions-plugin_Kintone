@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.7.5';
+  const UI_VERSION = '1.8.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -50,6 +50,27 @@
     { v: 'clear',          l: '清空' },
     { v: 'readonly',       l: '唯讀鎖定（限 *.show）' },
     { v: 'appendSubtable', l: 'Append 子表一筆 [參數: JSON]' },
+  ];
+
+  const MAPPING_VALUE_SOURCES = [
+    { v: 'fieldCopy',      l: '複製本記錄欄位' },
+    { v: 'fixed',          l: '固定值' },
+    { v: 'today',          l: '今天日期' },
+    { v: 'nowTime',        l: '現在時刻' },
+    { v: 'now',            l: '現在日期時間' },
+    { v: 'loginUser',      l: '登入者' },
+    { v: 'recordNumber',   l: '記錄編號' },
+    { v: 'recordId',       l: '記錄 $id' },
+    { v: 'nextStatus',     l: '下一狀態' },
+    { v: 'currentStatus',  l: '當前狀態' },
+    { v: 'actionName',     l: '流程動作名稱' },
+    { v: 'formula',        l: '簡易計算式' },
+    { v: 'dateShift',      l: '日期加減期間' },
+    { v: 'lookup',         l: '跨 App 查詢' },
+    { v: 'subtableLastRow', l: '子表某列欄位值' },
+    { v: 'uuid',           l: 'UUID（隨機）' },
+    { v: 'timestamp',      l: 'Unix 時間戳' },
+    { v: 'clear',          l: '清空' },
   ];
 
   const ACTIONS = [
@@ -253,6 +274,35 @@
       .catch(() => []);
   };
 
+  const TARGET_FIELDS = {};
+  const ensureTargetFields = (appId) => {
+    const id = String(appId || '').trim();
+    if (!id || TARGET_FIELDS[id]) return;
+    TARGET_FIELDS[id] = { status: 'loading', opts: [] };
+    kintone.api(kintone.api.url('/k/v1/app/form/fields.json', true), 'GET', { app: id })
+      .then((resp) => {
+        const opts = [{ v: '', l: '— 請選擇目標欄位 —' }];
+        const props = (resp && resp.properties) || {};
+        Object.keys(props).forEach((code) => {
+          const f = props[code];
+          opts.push({ v: code, l: `${f.label} (${code}) [${f.type}]` });
+        });
+        TARGET_FIELDS[id] = { status: 'done', opts };
+        render();
+      })
+      .catch((e) => {
+        TARGET_FIELDS[id] = { status: 'error', opts: [], error: (e && e.message) || String(e) };
+        render();
+      });
+  };
+  const targetFieldOptions = (appId) => {
+    const id = String(appId || '').trim();
+    const tf = TARGET_FIELDS[id];
+    if (tf && tf.status === 'done') return tf.opts;
+    if (tf && tf.status === 'loading') return [{ v: '', l: '— 載入目標欄位中… —' }];
+    return [{ v: '', l: '— 填入目標 App ID 後可選 —' }];
+  };
+
   const root = document.getElementById('ui-section');
 
   const render = () => {
@@ -449,6 +499,68 @@
     return wrap;
   };
 
+  const mappingParamControl = (m) => {
+    const vs = m.valueSource;
+    if (vs === 'fieldCopy') {
+      return fieldCombo(FIELD_OPTIONS, typeof m.valueParam === 'string' ? m.valueParam : '', (v) => { m.valueParam = v; });
+    }
+    if (vs === 'fixed') {
+      return textInput(typeof m.valueParam === 'string' ? m.valueParam : '', (v) => { m.valueParam = v; }, '固定值');
+    }
+    if (vs === 'formula') {
+      return textInput(typeof m.valueParam === 'string' ? m.valueParam : '', (v) => { m.valueParam = v; }, '例 {数量}*{単価}+10');
+    }
+    if (['lookup', 'dateShift', 'subtableLastRow'].includes(vs)) {
+      const ph = {
+        lookup:         '{ "app":"456","keyField":"客戶代碼","keyExpr":"{客戶代碼}","returnField":"電話","onMiss":"empty" }',
+        dateShift:      '{ "base":{"from":"target","field":"申請日期"}, "amount":1, "unit":"years", "output":"date" }',
+        subtableLastRow: '{ "table":"明細","field":"金額","row":"last" }',
+      }[vs] || '';
+      return textarea(m.valueParam, (v) => { try { m.valueParam = JSON.parse(v); } catch { m.valueParam = v; } }, ph);
+    }
+    return el('span', { class: 'sda-row-label', style: { color: '#aaa', alignSelf: 'center' } }, ['（此來源不需參數）']);
+  };
+
+  const renderMappingEditor = (r, kind, targetOpts, addLabel) => {
+    if (!Array.isArray(r[kind])) r[kind] = [];
+    const wrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+
+    r[kind].forEach((m, mi) => {
+      const row = el('div', { class: 'sda-mapping-row' });
+      row.appendChild(fieldCombo(targetOpts, m.targetField, (v) => { r[kind][mi].targetField = v; }));
+      row.appendChild(el('span', { class: 'sda-arrow' }, ['⇐']));
+      const srcWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '0' } });
+      srcWrap.appendChild(select(MAPPING_VALUE_SOURCES, m.valueSource || 'fieldCopy', (v) => { r[kind][mi].valueSource = v; render(); }));
+      srcWrap.appendChild(mappingParamControl(m));
+      row.appendChild(srcWrap);
+      row.appendChild(el('button', { class: 'sda-btn-row', onclick: () => { r[kind].splice(mi, 1); render(); } }, ['✕']));
+      wrap.appendChild(row);
+    });
+
+    const btnRow = el('div', { style: { display: 'flex', gap: '8px', marginTop: '2px' } });
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn sda-btn-add', style: { fontSize: '11px', padding: '3px 9px', color: '#2471a3', borderColor: '#aed6f1', marginTop: '0' },
+      onclick: () => { r[kind].push({ targetField: '', valueSource: 'fieldCopy', valueParam: '' }); render(); },
+    }, [addLabel || '+ 新增對應']));
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn', style: { fontSize: '11px', padding: '3px 9px' },
+      title: '進階：直接以 JSON 編輯此對應（陣列）',
+      onclick: () => openTextModal({
+        title: '進階：直接編輯此對應的 JSON（陣列）',
+        value: JSON.stringify(r[kind] || [], null, 2),
+        confirmLabel: '套用',
+        onConfirm: (text) => {
+          let parsed;
+          try { parsed = JSON.parse(text); } catch { alert('JSON 格式錯誤'); return false; }
+          if (!Array.isArray(parsed)) { alert('必須是陣列 [ ... ]'); return false; }
+          r[kind] = parsed; render();
+        },
+      }),
+    }, ['{ } JSON']));
+    wrap.appendChild(btnRow);
+    return wrap;
+  };
+
   const renderRuleCard = (r, idx) => {
     const card = el('div', {
       class: 'sda-rule-card' + (r.enabled === false ? ' is-disabled' : '')
@@ -532,14 +644,24 @@
     } else {
 
       addRow('寫入模式', select(WRITE_MODES, r.writeMode, (v) => { r.writeMode = v; render(); }));
-      addRow('目標 App ID', textInput(r.targetApp, (v) => { r.targetApp = v; }, '例：456'));
 
-      if (r.writeMode !== 'create') {
-        addRow('Key 對應 (JSON)', textarea(r.keyMapping, (v) => { try { r.keyMapping = JSON.parse(v); } catch {  } },
-          '[ { "targetField": "客戶代碼", "valueSource": "fieldCopy", "valueParam": "客戶代碼" } ]'));
+      ensureTargetFields(r.targetApp);
+      const appIdInput = el('input', { type: 'text', placeholder: '例：456（輸入後按 Enter 或點別處，載入目標欄位清單）' });
+      appIdInput.value = r.targetApp || '';
+      appIdInput.addEventListener('input', (e) => { r.targetApp = e.target.value.trim(); });
+      appIdInput.addEventListener('change', () => { ensureTargetFields(r.targetApp); render(); });
+      addRow('目標 App ID', appIdInput);
+
+      const tf = TARGET_FIELDS[String(r.targetApp || '').trim()];
+      if (tf && tf.status === 'error') {
+        addRow('', el('div', { class: 'sda-error' }, [`無法讀取目標 App 欄位（${tf.error}）。可直接手動輸入欄位代碼。`]));
       }
-      addRow('欄位對應 (JSON)', textarea(r.fieldMapping, (v) => { try { r.fieldMapping = JSON.parse(v); } catch {  } },
-        '[ { "targetField": "最近交易日", "valueSource": "today" }, { "targetField": "備註", "valueSource": "fixed", "valueParam": "auto" } ]'));
+
+      const tOpts = targetFieldOptions(r.targetApp);
+      if (r.writeMode !== 'create') {
+        addRow('Key 對應', renderMappingEditor(r, 'keyMapping', tOpts, '+ 新增 Key 對應'));
+      }
+      addRow('欄位對應', renderMappingEditor(r, 'fieldMapping', tOpts, '+ 新增欄位對應'));
       addRow('失敗處理', select(ON_ERROR, r.onError, (v) => { r.onError = v; }));
     }
 
