@@ -21,13 +21,15 @@ if ($Version) {
         Write-Error "Version format must be x.y.z (e.g. 1.8.0)"; exit 1
     }
 
+    $utf8NoBom = New-Object System.Text.UTF8Encoding $false
+
     $manifest = Get-Content contents\manifest.json -Raw -Encoding utf8
     $manifest = $manifest -replace '"version":\s*"[^"]+"', ('"version": "' + $Version + '"')
-    [System.IO.File]::WriteAllText("$PSScriptRoot\contents\manifest.json", $manifest, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText("$PSScriptRoot\contents\manifest.json", $manifest, $utf8NoBom)
 
     $cfg = Get-Content contents\dist\config.js -Raw -Encoding utf8
     $cfg = $cfg -replace "const UI_VERSION = '[^']+'", ("const UI_VERSION = '" + $Version + "'")
-    [System.IO.File]::WriteAllText("$PSScriptRoot\contents\dist\config.js", $cfg, [System.Text.Encoding]::UTF8)
+    [System.IO.File]::WriteAllText("$PSScriptRoot\contents\dist\config.js", $cfg, $utf8NoBom)
 
     Copy-Item contents\dist\desktop.js contents\dist\mobile.js -Force
 
