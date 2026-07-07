@@ -755,12 +755,32 @@
     return payload;
   };
 
+  const badFieldsFromError = (err) => {
+    let errObj = err && err.errors;
+    if (!errObj && err && typeof err.message === 'string') {
+      const brace = err.message.indexOf('{');
+      if (brace >= 0) {
+        try { errObj = JSON.parse(err.message.slice(brace)).errors; } catch (e) {  }
+      }
+    }
+    if (!errObj || typeof errObj !== 'object') return [];
+    const out = [];
+    Object.keys(errObj).forEach((k) => {
+      const m = /record\.([^.\[]+)/.exec(k) || /^([^.\[]+)/.exec(k);
+      const field = m ? m[1] : k;
+      const msg = errObj[k] && Array.isArray(errObj[k].messages) ? errObj[k].messages.join(' / ') : '';
+      out.push(msg ? `${field}（${msg}）` : field);
+    });
+    return out;
+  };
+
   const apiWrite = async (method, body, app, payload) => {
     try {
       return await apiWithToken(`/k/v1/record.json`, method, body, app);
     } catch (e) {
-      const fields = Object.keys(payload || {}).join(', ');
-      throw new Error(`${e.message}${fields ? ` (寫入欄位: ${fields})` : ''}`);
+      const bad = badFieldsFromError(e);
+      if (bad.length) throw new Error(`${e.message} → 問題欄位: ${bad.join('、')}`);
+      throw e;
     }
   };
 
