@@ -119,6 +119,8 @@
 }
 .sda-row-label { color: var(--sda-label); font-size: 13px; font-weight: 600; }
 
+.sda-trigger-group { display: flex; flex-wrap: wrap; align-items: center; }
+
 /* 通用輸入框 */
 .sda-rule-grid select, .sda-rule-grid input[type=text], .sda-rule-grid input[type=number] {
   padding: 7px 9px; font-size: 13.5px;

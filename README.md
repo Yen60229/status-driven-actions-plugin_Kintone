@@ -594,10 +594,12 @@
 
 ### B-2. 註冊的事件（被動觸發，無背景常駐）
 
-只註冊 6 個「使用者操作」事件：`create.show`、`edit.show`、`create.submit`、`edit.submit`、`detail.process.proceed`、`detail.show`。
+註冊 8 個「使用者操作」事件：`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`（另加 `create.submit.success`／`edit.submit.success` 給 Log 確認存檔成功，見 B-8b）。
 
 - **無** `setInterval`／輪詢／常駐迴圈；唯一的 `setTimeout` 是 `setFieldShown` 的下一個 tick（0ms）。
 - 每次觸發先做快速退出：無規則就立刻 return；需要時間才打 API。對低階電腦無負擔。
+- `index.edit.show`／`index.edit.submit`（一覽表內編輯列）走 `safeHandler` 直接呼叫 `applyRules`，**不**經過 `loggedApply`／存檔成功後的 `flushSubmitLog` 機制（kintone 沒有對應的 `index.edit.submit.success` 事件可掛），所以這兩個觸發**不會**寫進 Log App；只有 `writeSelf`／`writeOther` 動作本身會執行。`writeOther`（跨 App 寫入）目前只在 `process.proceed`／`create.submit`／`edit.submit`／`index.edit.submit` 執行，`*.show` 類觸發（含 `index.edit.show`）不執行 `writeOther`。
+- 一覽表內編輯是 kintone 平台功能限制：**只有被設成「一覽表欄位」的欄位才能透過 index 編輯存檔**，JS 改了值但欄位沒被設成一覽表欄位一樣存不進去。
 
 ### B-3. `process.proceed` 寫入流程（核心）
 
@@ -625,7 +627,7 @@
 
 需要 JSON / 特殊參數：
 
-- **`formula`**：如 `{数量}*{単価}+10`，欄位代碼用 `{}` 包；陣列欄位代換成長度，非數字欄位代換成加引號的字串字面值（故 `+` 在字串間會做串接，可拿來組合字串，如 `"No. "+{記錄編號}+{類型}`）。安全防護：先把代換後字串裡的引號包住的內容（欄位值本身，可含中文等任意字元）挖空成 `""` 取得「骨架」，只檢查骨架是否僅含 `數字 + - * / ( ) . 空白 " ,`，否則丟錯（防注入）；欄位值本身不受此白名單限制。
+- **`formula`**：如 `{数量}*{単価}+10`，欄位代碼用 `{}` 包；陣列欄位代換成長度，非數字欄位代換成加引號的字串字面值（換行/Tab/反斜線/引號皆會跳脫，多行文字欄位也能安全串接），故 `+` 在字串間會做串接，可拿來組合字串，如 `"No."+{單據編號}+" "+{受邀公司名稱}+"_"+{申請原因_略述}`。安全防護：先把代換後字串裡的引號包住的內容（欄位值本身，可含中文、換行等任意字元）挖空成 `""` 取得「骨架」，只檢查骨架是否僅含 `數字 + - * / ( ) . 空白 " ,`，否則丟錯（防注入）；欄位值本身不受此白名單限制。
 - **`lookup`**：`{ app, keyField, keyExpr, returnField, onMiss: 'empty'|'error' }`。`keyExpr` 內 `{欄位代碼}` 會被代換。走 `kintone.api`（使用者 session 權限）。
 - **`dateShift`**（v1.6.0，日期加減期間）：`{ base, amount, unit, output }`。
   - `base`：`{ from: 'this'|'target'|'now'|'today', field? }`。`from='target'` 讀 `ctx.targetRecord`（僅 `writeOther` 更新／Upsert 命中時存在，見 B-11）；`from='this'` 讀本記錄；`now`/`today` 取本機時鐘。
@@ -638,7 +640,9 @@
   - `map`：`{ "來源值": "目標選項名" }` 對照轉換；`onMiss`：`'raw'`（預設，用原值）/`'empty'`（略過）/其它字串（當固定替代值）。
 - **`appendSubtable`**：`{ subRules: [...], historyMode?: true }`，在子表格新增一列。`subRules` 每筆 `{ targetField, valueSource, valueParam? }`。
 - **`elapsedMinutes`**（僅用於 `appendSubtable` 的 subRules 內）：`{ sinceField: '執行日時' }`，回傳距上一列該時間欄位的分鐘數；第一列回 0。
-- **`readonly`**：隱藏欄位（僅 `*.show` 時機有意義）。
+- **`readonly`**：唯讀鎖定，僅 `*.show` 時機有意義（v1.9.0 起依觸發事件分兩種機制）：
+  - `index.edit.show`（一覽表內編輯列）：直接對 `ctx.record[targetField].disabled = true` 賦值——欄位仍顯示在該列，但輸入框變灰階不可編輯。`kintone.app.record.setFieldShown` 在一覽表編輯列沒有對應元素，故不適用。
+  - 其餘 `*.show`（`create.show`／`edit.show`）：沿用 `setFieldShown(code, false)` **隱藏欄位**，跟舊版行為相同。
 
 ### B-7. 子表格「履歷模式」（historyMode）
 
@@ -684,6 +688,19 @@
 ### B-10a. 狀態條件支援多值（v1.7.2）
 
 `statusMatches` 的 `fromStatus`／`toStatus`／`actionName`（process.proceed）與 `statusCond`（edit.* 觸發）皆改用 `statusMatchesList(spec, actual)` 比對：以 `[,，;；\n]` 切分成清單，`actual` 命中**任一**即成立；空字串或含 `*` 視為任意。單一值的舊設定行為不變（向下相容）。比對為純記憶體字串運算、每次事件僅跑一次（O(N·k)，k＝清單長度，實務微秒級），不增任何 API 呼叫。`fromStatus` 在 `cur===''`（event.record 取不到 `$status`）時仍維持「略過 from 檢查並 `console.warn`」的既有語意。
+
+### B-10b. `trigger` 支援複選（v1.9.0）
+
+`rule.trigger` 存成**逗號分隔字串**（單一值時行為與舊版相同，向下相容）。`triggerMatches(rule, trigger)` 拆成清單後用 `includes` 判斷，`statusMatches` 則改成依**實際觸發的事件**（`applyRules` 的 `trigger` 參數，而非 `rule.trigger`）決定要檢查 `fromStatus/toStatus/actionName` 還是 `statusCond`——因為同一條規則若複選了 `create.show`+`edit.show`，實際觸發時只會是其中一種事件，用哪個分支要看當下真正發生的是哪個。
+
+設定畫面（`config.js` 的 `triggerCheckboxGroup`）用勾選群組限制合法組合，寫進 `rule.trigger` 前先做互斥檢查：
+
+- `process.proceed` 只能單獨勾選（狀態語意跟其他觸發完全不同，混選會讓 `fromStatus/toStatus` 跟 `statusCond` 打架）。
+- 「顯示類」（`create.show`／`edit.show`／`index.edit.show`）彼此可自由複選。
+- 「儲存類」（`create.submit`／`edit.submit`／`index.edit.submit`）彼此可自由複選。
+- 顯示類與儲存類不能混選（`TRIGGER_GROUPS` 分組後，勾選新群組會清掉舊群組的勾選）。
+
+`create.show`／`create.submit` 因為新增時記錄尚無狀態，`statusMatches` 一律略過 `statusCond` 檢查（即使規則裡有填也不生效）；所以同一條規則勾 `create.show + edit.show` 沒問題，`statusCond` 只在觸發事件是 `edit.show`／`index.edit.show` 等既有記錄類事件時才會生效。
 
 ### B-11. 寫入其他 App（writeOther）
 

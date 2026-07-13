@@ -379,7 +379,12 @@
       const v = f && f.value;
       if (Array.isArray(v)) return v.length;
       const n = Number(v);
-      return Number.isFinite(n) ? n : `"${String(v || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+      return Number.isFinite(n) ? n : `"${String(v || '')
+        .replace(/\\/g, '\\\\')
+        .replace(/"/g, '\\"')
+        .replace(/\n/g, '\\n')
+        .replace(/\r/g, '\\r')
+        .replace(/\t/g, '\\t')}"`;
     });
     const skeleton = replaced.replace(/"(?:[^"\\]|\\.)*"/g, '""');
     if (!/^[\d+\-*/().\s",]+$/.test(skeleton)) throw new Error(`formula unsafe: ${replaced}`);
@@ -588,7 +593,10 @@
     }
   };
 
-  const triggerMatches = (rule, trigger) => rule.trigger === trigger;
+  const triggerMatches = (rule, trigger) => {
+    const list = String(rule.trigger || '').split(',').map((s) => s.trim()).filter(Boolean);
+    return list.includes(trigger);
+  };
 
   const statusMatchesList = (spec, actual) => {
     if (!spec) return true;
@@ -597,9 +605,9 @@
     return list.includes(actual);
   };
 
-  const statusMatches = (rule, event, record) => {
+  const statusMatches = (rule, event, record, trigger) => {
 
-    switch (rule.trigger) {
+    switch (trigger) {
       case 'process.proceed': {
 
         const cur  = (event.status && event.status.value) ||
@@ -627,6 +635,8 @@
         break;
       case 'edit.show':
       case 'edit.submit':
+      case 'index.edit.show':
+      case 'index.edit.submit':
       default: {
         const cur = (record.$status && record.$status.value) || record['狀態']?.value || '';
         if (!statusMatchesList(rule.statusCond, cur)) return false;
@@ -691,7 +701,12 @@
     switch (rule.valueSource) {
 
       case 'readonly': {
-        if (/\.show$/.test(rule.trigger)) setFieldShown(rule.targetField, false);
+        if (ctx.trigger === 'index.edit.show') {
+          const f = ctx.record[rule.targetField];
+          if (f) f.disabled = true;
+          return;
+        }
+        if (/\.show$/.test(ctx.trigger)) setFieldShown(rule.targetField, false);
         return;
       }
 
@@ -874,7 +889,7 @@
     const ctx = { event, record, trigger };
 
     const matched = (CONFIG.rules || []).filter((r) =>
-      r.enabled !== false && triggerMatches(r, trigger) && statusMatches(r, event, record)
+      r.enabled !== false && triggerMatches(r, trigger) && statusMatches(r, event, record, trigger)
     );
 
     _runInfo.matched = matched.length;
@@ -926,7 +941,8 @@
         return event;
       }
       case 'create.submit':
-      case 'edit.submit': {
+      case 'edit.submit':
+      case 'index.edit.submit': {
         for (const rule of otherRules) {
           try { await runWriteOther(rule, ctx); }
           catch (e) {
@@ -1113,7 +1129,7 @@
 
     // 3. 用既有比對邏輯找出命中的 process.proceed 規則
     const matched = (CONFIG.rules || []).filter((r) =>
-      r.enabled !== false && triggerMatches(r, 'process.proceed') && statusMatches(r, event, record)
+      r.enabled !== false && triggerMatches(r, 'process.proceed') && statusMatches(r, event, record, 'process.proceed')
     );
     if (matched.length === 0) {
       console.warn('[sda][runProceedRulesViaApi] 無命中 process.proceed 規則，未寫入', { action, fromStatus, toStatus: resolvedNext });
@@ -1164,6 +1180,14 @@
       handleEditShow(ev);
       return applyRules('edit.show', ev);
     })
+  );
+
+  kintone.events.on(E(['index.edit.show']),
+    safeHandler(async (ev) => applyRules('index.edit.show', ev))
+  );
+
+  kintone.events.on(E(['index.edit.submit']),
+    safeHandler(async (ev) => applyRules('index.edit.submit', ev))
   );
 
   kintone.events.on(E(['create.submit']), loggedApply('create.submit'));

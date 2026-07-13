@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.8.0';
+  const UI_VERSION = '1.9.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -23,10 +23,24 @@
   const TRIGGERS = [
     { v: 'create.show', l: '新增畫面載入時 (create.show)' },
     { v: 'edit.show',   l: '編輯畫面載入時 (edit.show)' },
+    { v: 'index.edit.show', l: '一覽表內編輯列載入時 (index.edit.show)' },
     { v: 'create.submit', l: '新增儲存前 (create.submit)' },
     { v: 'edit.submit',   l: '編輯儲存前 (edit.submit)' },
+    { v: 'index.edit.submit', l: '一覽表內編輯存檔前 (index.edit.submit)' },
     { v: 'process.proceed', l: '流程推進時 (process.proceed)' },
   ];
+
+  const TRIGGER_GROUPS = {
+    'process.proceed':    'proceed',
+    'create.show':        'show',
+    'edit.show':          'show',
+    'index.edit.show':    'show',
+    'create.submit':      'submit',
+    'edit.submit':        'submit',
+    'index.edit.submit':  'submit',
+  };
+
+  const triggerListOf = (r) => String(r.trigger || '').split(',').map((s) => s.trim()).filter(Boolean);
 
   const VALUE_SOURCES = [
     { v: 'fixed',          l: '固定值' },
@@ -48,7 +62,7 @@
     { v: 'currentStatus',  l: '當前狀態' },
     { v: 'actionName',     l: '流程動作名稱' },
     { v: 'clear',          l: '清空' },
-    { v: 'readonly',       l: '唯讀鎖定（限 *.show）' },
+    { v: 'readonly',       l: '唯讀鎖定（限 *.show；index.edit.show 顯示但不可編輯，其餘 *.show 直接隱藏）' },
     { v: 'appendSubtable', l: 'Append 子表一筆 [參數: JSON]' },
   ];
 
@@ -143,6 +157,38 @@
     const wrap = el('label', { for: id, style: { display: 'inline-flex', gap: '4px', alignItems: 'center' } });
     wrap.appendChild(cb);
     wrap.appendChild(document.createTextNode(' ' + label));
+    return wrap;
+  };
+
+  const triggerCheckboxGroup = (value, onChange) => {
+    const wrap = el('div', { class: 'sda-trigger-group' });
+    const selected = new Set(String(value || '').split(',').map((s) => s.trim()).filter(Boolean));
+
+    TRIGGERS.forEach((t) => {
+      const id = `trig-${Math.random().toString(36).slice(2, 8)}`;
+      const cb = el('input', { type: 'checkbox', id });
+      cb.checked = selected.has(t.v);
+      cb.addEventListener('change', (e) => {
+        if (e.target.checked) {
+          const group = TRIGGER_GROUPS[t.v];
+          const otherGroups = new Set([...selected].map((v) => TRIGGER_GROUPS[v]));
+          if (otherGroups.size && !otherGroups.has(group)) selected.clear();
+          selected.add(t.v);
+        } else {
+          selected.delete(t.v);
+        }
+        onChange([...selected].join(','));
+      });
+      const label = el('label', { for: id, style: { display: 'inline-flex', gap: '4px', alignItems: 'center', marginRight: '14px', fontWeight: 'normal' } });
+      label.appendChild(cb);
+      label.appendChild(document.createTextNode(' ' + t.l));
+      wrap.appendChild(label);
+    });
+
+    const hint = el('div', { style: { color: '#888', fontSize: '12px', marginTop: '4px' } },
+      ['流程推進 (process.proceed) 只能單獨勾選；「顯示類」(*.show) 之間可複選；「儲存類」(*.submit) 之間可複選；顯示類與儲存類不能混選。']
+    );
+    wrap.appendChild(hint);
     return wrap;
   };
 
@@ -604,16 +650,17 @@
       grid.appendChild(control);
     };
 
-    addRow('觸發時機', select(TRIGGERS, r.trigger, (v) => { r.trigger = v; render(); }));
+    addRow('觸發時機', triggerCheckboxGroup(r.trigger, (v) => { r.trigger = v; render(); }));
 
-    if (r.trigger === 'process.proceed') {
+    const trigSet = new Set(triggerListOf(r));
+    if (trigSet.has('process.proceed')) {
       addRow('從狀態 (fromStatus)', textInput(r.fromStatus, (v) => { r.fromStatus = v; }, '* 任意；多個用逗號，例 A,B'));
       addRow('到狀態 (toStatus)',   textInput(r.toStatus,   (v) => { r.toStatus = v; }, '* 任意；多個用逗號，例 核准完了,B課核准'));
       addRow('動作名稱 (actionName)', textInput(r.actionName, (v) => { r.actionName = v; }, '* 任意；多個用逗號'));
-    } else if (r.trigger === 'edit.show' || r.trigger === 'edit.submit') {
-      addRow('當狀態 = ', textInput(r.statusCond, (v) => { r.statusCond = v; }, '* 任意；多個用逗號，例 進行中,審核中'));
+    } else if (trigSet.size > 0) {
+      addRow('當狀態 = ', textInput(r.statusCond, (v) => { r.statusCond = v; }, '* 任意；多個用逗號，例 進行中,審核中（新增類事件無狀態，此條件會被忽略）'));
     } else {
-      const note = el('div', { style: { color: '#888', fontSize: '12px' } }, ['（新增時無狀態，狀態條件忽略）']);
+      const note = el('div', { style: { color: '#888', fontSize: '12px' } }, ['（尚未勾選觸發時機）']);
       addRow('狀態條件', note);
     }
 

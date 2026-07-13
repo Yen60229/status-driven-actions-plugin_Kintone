@@ -91,8 +91,9 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 寫入判別 | `classifyWrite`（userObject / arrayField / scalar） | B-9 |
 | 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
 | 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
+| 觸發複選 | `triggerMatches`／`statusMatches` 依實際觸發事件分流；`rule.trigger` 可逗號分隔複選（v1.9.0） | B-10b |
 | 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算）；`buildOtherPayload` 回傳 `{payload,suspects}`，`fieldCopy` 來源欄位不存在／`dateShift` 空值時標記可疑；`badFieldsFromError` 解析 kintone `errors` 指名欄位 | B-11 |
-| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
+| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；觸發時機用 `triggerCheckboxGroup` 複選（v1.9.0）；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
 **先讀附錄 B 再動程式碼**——它是這份 runtime 的權威說明。
 
@@ -171,10 +172,13 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ### trigger 與狀態條件對應
 
+`trigger` 可填逗號分隔字串複選多個觸發（v1.9.0）。`statusMatches` 是依**實際觸發的那個事件**分流判斷（`fromStatus/toStatus/actionName` 或 `statusCond`），跟 `rule.trigger` 裡還填了什麼無關，所以技術上把 `process.proceed` 跟其他觸發混在同一條 `trigger` 字串裡也能正常運作。但設定畫面的複選 checkbox 刻意把 `process.proceed` 設計成只能單獨勾（其餘 6 種顯示類／儲存類可自由複選），純粹是為了規則語意清楚——同一條規則同時用「流程狀態」跟「記錄狀態」兩套條件語言容易搞混。手動編輯 JSON 匯入時不受此限制，但建議仍照這個慣例分開寫，避免自己看不懂自己設的規則。
+
 | `trigger` | 狀態欄位 | 說明 |
 |---|---|---|
 | `process.proceed` | `fromStatus` / `toStatus` / `actionName` | 流程推進時；最常用 |
 | `edit.show` / `edit.submit` | `statusCond` | 編輯載入／儲存前 |
+| `index.edit.show` / `index.edit.submit` | `statusCond` | 一覽表內編輯列載入／存檔前（v1.9.0；只有設成一覽表欄位的欄位才能被 index 編輯存檔，kintone 平台限制）；`writeOther` 只在 `index.edit.submit` 執行，`index.edit.show` 不執行；兩者皆不寫 Log App（無對應的 success 事件可掛） |
 | `create.show` / `create.submit` | （無） | 新增時，記錄尚無狀態 |
 
 ### valueSource 一覽（writeSelf 的 `valueParam`／writeOther 的 mapping 共用）
@@ -193,7 +197,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | `subtableLastRow` | `{ table, field, row?, map?, onMiss? }` | 子表某列欄位值；`row`:`last`(預設)/`first`/數字/`all` |
 | `appendSubtable` | `{ subRules:[{targetField,valueSource,valueParam?}], historyMode? }` | 子表格新增一列（履歷） |
 | `clear` | — | 清空欄位 |
-| `readonly` | — | 隱藏鎖定欄位（僅 `*.show` 時機） |
+| `readonly` | — | 唯讀鎖定（僅 `*.show` 時機）；`index.edit.show` 灰階不可編輯，其餘 `*.show` 直接隱藏欄位（v1.9.0） |
 
 `dateShift` 的 `valueParam`：
 
@@ -253,8 +257,8 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ## 註冊的事件（contents/dist/desktop.js 末尾）
 
-`create.show`、`edit.show`、`create.submit`、`edit.submit`、`detail.process.proceed`、`detail.show`，
-另加 `create.submit.success`／`edit.submit.success`（給 Log 確認存檔成功）。
+`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`，
+另加 `create.submit.success`／`edit.submit.success`（給 Log 確認存檔成功；`index.edit.submit` 無對應 success 事件，不寫 Log，見 README B-2）。
 
 ---
 
