@@ -625,7 +625,7 @@
 
 需要 JSON / 特殊參數：
 
-- **`formula`**：如 `{数量}*{単価}+10`，欄位代碼用 `{}` 包；陣列欄位代換成長度。安全防護：代換後只允許 `數字 + - * / ( ) . 空白 " \ , 字母底線`，否則丟錯（防注入）。
+- **`formula`**：如 `{数量}*{単価}+10`，欄位代碼用 `{}` 包；陣列欄位代換成長度，非數字欄位代換成加引號的字串字面值（故 `+` 在字串間會做串接，可拿來組合字串，如 `"No. "+{記錄編號}+{類型}`）。安全防護：先把代換後字串裡的引號包住的內容（欄位值本身，可含中文等任意字元）挖空成 `""` 取得「骨架」，只檢查骨架是否僅含 `數字 + - * / ( ) . 空白 " ,`，否則丟錯（防注入）；欄位值本身不受此白名單限制。
 - **`lookup`**：`{ app, keyField, keyExpr, returnField, onMiss: 'empty'|'error' }`。`keyExpr` 內 `{欄位代碼}` 會被代換。走 `kintone.api`（使用者 session 權限）。
 - **`dateShift`**（v1.6.0，日期加減期間）：`{ base, amount, unit, output }`。
   - `base`：`{ from: 'this'|'target'|'now'|'today', field? }`。`from='target'` 讀 `ctx.targetRecord`（僅 `writeOther` 更新／Upsert 命中時存在，見 B-11）；`from='this'` 讀本記錄；`now`/`today` 取本機時鐘。

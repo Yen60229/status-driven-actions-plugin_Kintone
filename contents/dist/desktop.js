@@ -379,9 +379,10 @@
       const v = f && f.value;
       if (Array.isArray(v)) return v.length;
       const n = Number(v);
-      return Number.isFinite(n) ? n : `"${String(v || '').replace(/"/g, '\\"')}"`;
+      return Number.isFinite(n) ? n : `"${String(v || '').replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
     });
-    if (!/^[\d+\-*/().\s"\\,a-zA-Z_]+$/.test(replaced)) throw new Error(`formula unsafe: ${replaced}`);
+    const skeleton = replaced.replace(/"(?:[^"\\]|\\.)*"/g, '""');
+    if (!/^[\d+\-*/().\s",]+$/.test(skeleton)) throw new Error(`formula unsafe: ${replaced}`);
     try { return Function('"use strict";return (' + replaced + ')')(); }
     catch (e) { throw new Error(`formula failed: ${expr}`); }
   };
