@@ -196,6 +196,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | `dateShift` | 見下 | 讀日期 ± 期間（v1.6.0） |
 | `subtableLastRow` | `{ table, field, row?, map?, onMiss? }` | 子表某列欄位值；`row`:`last`(預設)/`first`/數字/`all` |
 | `appendSubtable` | `{ subRules:[{targetField,valueSource,valueParam?}], historyMode? }` | 子表格新增一列（履歷） |
+| `appendText` | `{ value:{valueSource,valueParam?}, separator?, dedup? }` | 文字欄位串接追加（v1.11.0）。`value` 為巢狀 valueSource，決定要附加的新值；`separator` 預設 `" / "`；`dedup`(預設 true) 時若新值已存在於現有字串中則略過。`writeSelf` 讀寫本記錄的 `targetField`；`writeOther` 讀寫目標 App 的 `targetField`（需 `ctx.targetRecord`，upsert 命中既有記錄時才有；新增時視為空值直接寫入） |
 | `clear` | — | 清空欄位 |
 | `readonly` | — | 唯讀鎖定（僅 `*.show` 時機）；`index.edit.show` 灰階不可編輯，其餘 `*.show` 直接隱藏欄位（v1.9.0） |
 

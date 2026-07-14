@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.10.0';
+  const UI_VERSION = '1.11.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -104,6 +104,7 @@
     { v: 'clear',          l: '清空' },
     { v: 'readonly',       l: '唯讀鎖定（限 *.show；index.edit.show 顯示但不可編輯，其餘 *.show 直接隱藏）' },
     { v: 'appendSubtable', l: 'Append 子表一筆 [參數: JSON]' },
+    { v: 'appendText',     l: '文字串接追加（去重，可設分隔字元）[參數: JSON]' },
   ];
 
   const MAPPING_VALUE_SOURCES = [
@@ -125,6 +126,7 @@
     { v: 'uuid',           l: 'UUID（隨機）' },
     { v: 'timestamp',      l: 'Unix 時間戳' },
     { v: 'clear',          l: '清空' },
+    { v: 'appendText',     l: '文字串接追加（去重）' },
   ];
 
   const ACTIONS = [
@@ -602,11 +604,12 @@
     if (vs === 'formula') {
       return textInput(typeof m.valueParam === 'string' ? m.valueParam : '', (v) => { m.valueParam = v; }, '例 {数量}*{単価}+10');
     }
-    if (['lookup', 'dateShift', 'subtableLastRow'].includes(vs)) {
+    if (['lookup', 'dateShift', 'subtableLastRow', 'appendText'].includes(vs)) {
       const ph = {
         lookup:         '{ "app":"456","keyField":"客戶代碼","keyExpr":"{客戶代碼}","returnField":"電話","onMiss":"empty" }',
         dateShift:      '{ "base":{"from":"target","field":"申請日期"}, "amount":1, "unit":"years", "output":"date" }',
         subtableLastRow: '{ "table":"明細","field":"金額","row":"last" }',
+        appendText:     '{ "value":{"valueSource":"recordId"}, "separator":" / ", "dedup":true }',
       }[vs] || '';
       return textarea(m.valueParam, (v) => { try { m.valueParam = JSON.parse(v); } catch { m.valueParam = v; } }, ph);
     }
@@ -718,14 +721,15 @@
       addRow('目標欄位', fieldCombo(FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
       addRow('值的來源', searchableSelect(VALUE_SOURCES, r.valueSource, (v) => { r.valueSource = v; render(); }));
 
-      const needsParam = ['fixed', 'fieldCopy', 'formula', 'lookup', 'dateShift', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
+      const needsParam = ['fixed', 'fieldCopy', 'formula', 'lookup', 'dateShift', 'appendSubtable', 'subtableLastRow', 'appendText'].includes(r.valueSource);
       if (needsParam) {
-        const isJson = ['lookup', 'dateShift', 'appendSubtable', 'subtableLastRow'].includes(r.valueSource);
+        const isJson = ['lookup', 'dateShift', 'appendSubtable', 'subtableLastRow', 'appendText'].includes(r.valueSource);
         const jsonPlaceholder = {
           lookup:         '{ "app": "456", "keyField": "客戶代碼", "keyExpr": "{客戶代碼}", "returnField": "聯絡電話", "onMiss": "empty" }',
           dateShift:      '{ "base": { "from": "this", "field": "申請日期" }, "amount": 30, "unit": "days", "output": "date" }\n// base.from: "this"=本記錄, "target"=目標App那筆, "now"/"today"=執行當下\n// amount: 數字(可負); 或 { "from":"this"|"target", "field":"天數欄位" }\n// unit: days|hours|minutes|months|years   output: date|datetime|time',
           appendSubtable: '{ "subRules": [ { "targetField": "履歷_狀態", "valueSource": "nextStatus" }, { "targetField": "履歷_時間", "valueSource": "now" } ] }',
           subtableLastRow: '{ "table": "A", "field": "a1", "row": "all" }\n// row: "all"=掃整欄(多勾), "last"=最後一列, "first"=第一列\n// map: { "來源值": "選項名" }  onMiss: "raw"|"empty"',
+          appendText:     '{ "value": { "valueSource": "recordNumber" }, "separator": " / ", "dedup": true }\n// value: 巢狀 valueSource，決定要附加的新值（可用 fixed/fieldCopy/recordNumber/recordId/today 等）\n// separator: 分隔字元，預設 " / "\n// dedup: 是否略過已存在的值，預設 true\n// 目標欄位空白時直接寫入新值；欄位為此規則的「目標欄位」本身的現有值',
         }[r.valueSource] || '';
         addRow('值的參數', isJson
           ? textarea(r.valueParam, (v) => { try { r.valueParam = JSON.parse(v); } catch { r.valueParam = v; } }, jsonPlaceholder)

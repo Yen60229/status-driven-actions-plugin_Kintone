@@ -417,6 +417,28 @@
       case 'dateShift':
         _resolvedValue = computeDateShift(spec.valueParam || {}, ctx);
         break;
+      case 'appendText': {
+        const p = spec.valueParam || {};
+        const newRaw = await resolveValue(p.value || {}, ctx);
+        const newVal = newRaw == null ? '' : String(newRaw).trim();
+        const sep = typeof p.separator === 'string' ? p.separator : ' / ';
+        const dedup = p.dedup !== false;
+
+        const existingField = ctx.isOther
+          ? (ctx.targetRecord && ctx.targetRecord[spec.targetField])
+          : record[spec.targetField];
+        const existingRaw = existingField ? existingField.value : '';
+        const existing = typeof existingRaw === 'string' ? existingRaw.trim() : String(existingRaw ?? '');
+
+        if (!newVal) { _resolvedValue = existing; break; }
+        if (!existing) { _resolvedValue = newVal; break; }
+
+        const parts = existing.split(sep).map((s) => s.trim()).filter(Boolean);
+        if (dedup && parts.includes(newVal)) { _resolvedValue = existing; break; }
+        parts.push(newVal);
+        _resolvedValue = parts.join(sep);
+        break;
+      }
       default:
         console.warn('[sda] unknown valueSource', spec.valueSource);
         return null;
@@ -532,7 +554,9 @@
     (((m.valueParam.base || {}).from === 'target') ||
      (m.valueParam.amount && typeof m.valueParam.amount === 'object' && m.valueParam.amount.from === 'target'));
 
-  const ruleNeedsTargetRecord = (rule) => (rule.fieldMapping || []).some(dateShiftNeedsTarget);
+  const appendTextNeedsTarget = (m) => m && m.valueSource === 'appendText';
+
+  const ruleNeedsTargetRecord = (rule) => (rule.fieldMapping || []).some((m) => dateShiftNeedsTarget(m) || appendTextNeedsTarget(m));
 
   const classifyWrite = (existing, raw) => {
     if (raw && typeof raw === 'object' && raw.code && !Array.isArray(raw)) return 'userObject';
@@ -863,10 +887,11 @@
   const runWriteOther = async (rule, ctx) => {
     const app = rule.targetApp;
     if (!app) throw new Error('writeOther: targetApp missing');
+    const otherCtx = { ...ctx, isOther: true };
 
     switch (rule.writeMode) {
       case 'create': {
-        const { payload, suspects } = await buildOtherPayload(rule, ctx);
+        const { payload, suspects } = await buildOtherPayload(rule, otherCtx);
         await apiWrite('POST', { app, record: payload }, app, suspects);
         return;
       }
@@ -874,7 +899,7 @@
       case 'upsert':
       default: {
         const keyParts = await Promise.all((rule.keyMapping || []).map(async (m) => {
-          const v = await resolveValue(m, ctx);
+          const v = await resolveValue(m, otherCtx);
           return `${m.targetField} = "${String(v || '').replace(/"/g, '\\"')}"`;
         }));
         if (!keyParts.length) throw new Error('writeOther: keyMapping required for update/upsert');
@@ -887,10 +912,10 @@
         if (found.records && found.records.length) {
           const targetRecord = found.records[0];
           const id = targetRecord.$id.value;
-          const { payload, suspects } = await buildOtherPayload(rule, { ...ctx, targetRecord });
+          const { payload, suspects } = await buildOtherPayload(rule, { ...otherCtx, targetRecord });
           await apiWrite('PUT', { app, id, record: payload }, app, suspects);
         } else if (rule.writeMode === 'upsert') {
-          const { payload, suspects } = await buildOtherPayload(rule, ctx);
+          const { payload, suspects } = await buildOtherPayload(rule, otherCtx);
           await apiWrite('POST', { app, record: payload }, app, suspects);
         } else {
           throw new Error(`writeOther: no record found for ${query}`);

@@ -639,6 +639,13 @@
   - `row`：省略/`'last'`＝最後一列；`'first'`＝第一列；數字 N＝第 N 列（0 起算，負數從尾端）；`'all'`＝掃整欄、收集所有非空去重值（回傳陣列，適合一次勾多個 CHECK_BOX）。
   - `map`：`{ "來源值": "目標選項名" }` 對照轉換；`onMiss`：`'raw'`（預設，用原值）/`'empty'`（略過）/其它字串（當固定替代值）。
 - **`appendSubtable`**：`{ subRules: [...], historyMode?: true }`，在子表格新增一列。`subRules` 每筆 `{ targetField, valueSource, valueParam? }`。
+- **`appendText`**（v1.11.0，文字欄位串接追加）：`{ value, separator?, dedup? }`。
+  - `value`：巢狀 `{ valueSource, valueParam? }`，用來計算要附加的「新值」，可遞迴使用任何其他 `valueSource`（如 `fixed`／`fieldCopy`／`recordId`／`recordNumber`／`today`）。
+  - `separator`：串接分隔字元，省略預設 `" / "`。
+  - `dedup`：省略預設 `true`；為 `true` 時，若新值已存在於目標欄位現有內容中（依 `separator` 切分後逐一比對，去除頭尾空白），則直接沿用現有值不重複附加。
+  - 現有值讀取來源依動作而異：`writeSelf` 讀 `ctx.record[targetField]`（本記錄）；`writeOther` 讀 `ctx.targetRecord[targetField]`——只有 `update`／`upsert` 命中既有記錄時才有 `targetRecord`，故 `ruleNeedsTargetRecord` 已納入 `appendText` 判斷（見 B-11），確保這種情況下 GET 會抓整筆而非只抓 `$id`；`upsert` 未命中改走 `create` 時無既有記錄可讀，視為空值，直接寫入新值本身（不加分隔字元）。
+  - 目標欄位型別須為文字類（`SINGLE_LINE_TEXT`／`MULTI_LINE_TEXT`）；若目標欄位實際是陣列型（CHECK_BOX 等），`appendText` 算出的字串仍會整串塞進 `classifyWrite` 判定的陣列分割規則，語意上不建議混用——陣列型欄位請改用既有的 `appendMode`（見 B-9）。
+  - 與 `skipIfFilled` 併用時：`skipIfFilled` 在目標欄位已有值時會讓整條規則直接跳過（含 `appendText` 本身），等同「只在第一次寫入」，不會進到附加判斷；如需「每次都嘗試附加去重」，`skipIfFilled` 應設為 `false`（或不設）。
 - **`elapsedMinutes`**（僅用於 `appendSubtable` 的 subRules 內）：`{ sinceField: '執行日時' }`，回傳距上一列該時間欄位的分鐘數；第一列回 0。
 - **`readonly`**：唯讀鎖定，僅 `*.show` 時機有意義（v1.9.0 起依觸發事件分兩種機制）：
   - `index.edit.show`（一覽表內編輯列）：直接對 `ctx.record[targetField].disabled = true` 賦值——欄位仍顯示在該列，但輸入框變灰階不可編輯。`kintone.app.record.setFieldShown` 在一覽表編輯列沒有對應元素，故不適用。
@@ -706,7 +713,9 @@
 
 `writeMode`：`create`/`update`/`upsert`。`update`/`upsert` 需 `keyMapping`（組 query 找 `$id`）；`fieldMapping` 為要寫入的欄位（由 `buildOtherPayload` 逐筆 `resolveValue` 組成）。`onError`：`block`（預設，擋下提交）/`log`/`ignore`。
 
-**讀目標記錄回算（v1.6.0）**：`fieldMapping` 內若有 `dateShift` 且 `base.from`（或 `amount.from`）為 `target`，`ruleNeedsTargetRecord` 會回 `true`，此時 GET 找記錄**不加 `fields:['$id']` 限制**（抓整筆），把 `found.records[0]` 以 `ctx.targetRecord` 傳進 `buildOtherPayload`，讓 `dateShift` 能讀目標 App 現有欄位值；否則維持只抓 `$id`。Upsert 找不到改用 `create` 新增時無 `targetRecord`，`from='target'` 得空值。
+**讀目標記錄回算（v1.6.0；v1.11.0 擴及 `appendText`）**：`fieldMapping` 內若有 `dateShift` 且 `base.from`（或 `amount.from`）為 `target`，或有 `appendText`，`ruleNeedsTargetRecord` 會回 `true`，此時 GET 找記錄**不加 `fields:['$id']` 限制**（抓整筆），把 `found.records[0]` 以 `ctx.targetRecord` 傳進 `buildOtherPayload`，讓 `dateShift`／`appendText` 能讀目標 App 現有欄位值；否則維持只抓 `$id`。Upsert 找不到改用 `create` 新增時無 `targetRecord`，`from='target'` 得空值、`appendText` 視現有值為空。
+
+**`ctx.isOther` 標記（v1.11.0）**：`runWriteOther` 一律以 `{ ...ctx, isOther: true }` 呼叫 `resolveValue`／`buildOtherPayload`（含 `create`／找不到記錄改新增等所有分支），讓 `appendText` 能分辨當前是 `writeSelf`（讀 `ctx.record`）還是 `writeOther`（讀 `ctx.targetRecord`，避免誤讀觸發規則的來源記錄）。此標記不影響其他既有 `valueSource` 的行為。
 
 ### B-12. 安全性注意事項
 
