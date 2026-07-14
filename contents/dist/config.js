@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.9.0';
+  const UI_VERSION = '1.10.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -14,6 +14,46 @@
   if (state.selfAppToken === undefined) state.selfAppToken = '';
   if (state.logAppId === undefined) state.logAppId = '';
   if (state.logToken === undefined) state.logToken = '';
+
+  // ----- SECURE TOKEN STORAGE -----
+  // Token 存放於外掛代理設定（加密於 kintone 伺服器，只有本設定頁能透過 getProxyConfig 讀回；
+  // 一般使用者在記錄頁完全讀不到）。代理設定以「網址前置比對」決定是否注入，因此只要針對
+  // /k/v1/ 前綴為 GET / POST / PUT 各註冊一次，即涵蓋 record.json / records.json 的
+  // 建立、更新、查詢，不需為每個 App 分別註冊。
+  const REST_PREFIX = kintone.api.url('/k/v1/record.json', true).replace(/record\.json.*$/, '');
+  // 存放「App → Token」對照的內部欄位；此網址永不會被實際呼叫（.invalid 保證不解析），
+  // 僅供本設定頁 getProxyConfig 回填輸入框使用。
+  const TOKEN_MAP_URL = 'https://sda-plugin.invalid/token-map';
+
+  const readSecuredTokenMap = () => {
+    try {
+      const cfg = kintone.plugin.app.getProxyConfig(TOKEN_MAP_URL, 'POST');
+      if (cfg && cfg.data && cfg.data.map) return JSON.parse(cfg.data.map);
+    } catch (e) { /* 尚未設定過 */ }
+    return null;
+  };
+
+  // 讀回已加密的 Token 值供編輯；若代理設定尚無資料（首次從舊版遷移），
+  // state 仍保有舊版明文 Token（來自 getConfig），可直接沿用，按一次儲存即完成搬移。
+  const _securedMap = readSecuredTokenMap();
+  if (_securedMap) {
+    if (typeof _securedMap.self === 'string') state.selfAppToken = _securedMap.self;
+    if (typeof _securedMap.log === 'string') state.logToken = _securedMap.log;
+    state.tokens.forEach((t) => {
+      const v = _securedMap[String(t.appId)];
+      if (typeof v === 'string') t.token = v;
+    });
+  }
+
+  // 儲存代理設定為 callback 型 API，需鏈式呼叫，最後才寫一般設定。
+  const chainProxy = (entries, done) => {
+    const next = (i) => {
+      if (i >= entries.length) return done();
+      const [u, m, h, d] = entries[i];
+      kintone.plugin.app.setProxyConfig(u, m, h, d, () => next(i + 1));
+    };
+    next(0);
+  };
 
   const _fmtNow = (() => {
     const d = new Date(), p = n => String(n).padStart(2, '0');
@@ -135,8 +175,8 @@
     return s;
   };
 
-  const textInput = (value, onChange, placeholder = '') => {
-    const i = el('input', { type: 'text', placeholder });
+  const textInput = (value, onChange, placeholder = '', type = 'text') => {
+    const i = el('input', { type, placeholder });
     i.value = value == null ? '' : value;
     i.addEventListener('input', (e) => onChange(e.target.value));
     return i;
@@ -384,7 +424,7 @@
     sec.appendChild(mkRow('Log App ID：',
       textInput(state.logAppId, (v) => { state.logAppId = v.trim(); }, '例：123（留空＝不啟用 Log）')));
     sec.appendChild(mkRow('Log API Token：',
-      textInput(state.logToken, (v) => { state.logToken = v.trim(); }, '選填。Log App 的 Token（具「新增記錄」權限）。留空＝用操作者身分寫')));
+      textInput(state.logToken, (v) => { state.logToken = v.trim(); }, '選填。Log App 的 Token（具「新增記錄」權限）。留空＝用操作者身分寫', 'password')));
 
     return sec;
   };
@@ -393,13 +433,19 @@
     const sec = el('section', { class: 'sda-section' });
     sec.appendChild(el('h3', { class: 'sda-section-title' }, ['1. API Token 設定']));
 
+    sec.appendChild(el('p', { class: 'sda-section-help', style: { color: '#2471a3' } }, [
+      '🔒 這裡輸入的 Token 會加密儲存在 kintone 伺服器（外掛代理設定），一般使用者無法讀取；' +
+      '執行期由伺服器端注入，不會出現在瀏覽器或網路請求中。' +
+      '從舊版更新後，請在此頁按一次「儲存」，即可把既有 Token 搬入加密儲存。'
+    ]));
+
     sec.appendChild(el('p', { class: 'sda-section-help' }, [
       '【本 App API Token】流程推進後若使用者在新狀態沒有編輯權限，' +
       '外掛會用此 Token 補償寫入子表履歷。未填時若有欄位權限限制可能導致履歷漏記。'
     ]));
     const selfRow = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '16px' } });
     selfRow.appendChild(el('span', { style: { whiteSpace: 'nowrap', fontSize: '13px' } }, ['本 App Token：']));
-    const selfInput = textInput(state.selfAppToken, (v) => { state.selfAppToken = v; }, '本 App 的 API Token（管理員建立，具記錄編輯權限）');
+    const selfInput = textInput(state.selfAppToken, (v) => { state.selfAppToken = v; }, '本 App 的 API Token（管理員建立，具記錄編輯權限）', 'password');
     selfInput.style.flex = '1';
     selfRow.appendChild(selfInput);
     sec.appendChild(selfRow);
@@ -422,7 +468,7 @@
       tbody.appendChild(el('tr', {}, [
         el('td', {}, [textInput(t.appId, (v) => { state.tokens[i].appId = v; })]),
         el('td', {}, [textInput(t.appLabel, (v) => { state.tokens[i].appLabel = v; }, '客戶主檔')]),
-        el('td', {}, [textInput(t.token, (v) => { state.tokens[i].token = v; }, 'API Token')]),
+        el('td', {}, [textInput(t.token, (v) => { state.tokens[i].token = v; }, 'API Token', 'password')]),
         el('td', {}, [el('button', {
           class: 'sda-btn-row',
           onclick: () => { state.tokens.splice(i, 1); render(); },
@@ -842,9 +888,48 @@
       msg.textContent = errors.join(' / ');
       return;
     }
-    kintone.plugin.app.setConfig({ data: JSON.stringify(state) }, () => {
-      alert('設定已儲存。重新整理 App 後生效。');
-      window.location.href = `../../flow?app=${APP_ID}`;
+
+    // ----- 1) 蒐集 Token：組合注入用的 header，以及回填用的 App→Token 對照 -----
+    const selfToken = (state.selfAppToken || '').trim();
+    const logToken = (state.logToken || '').trim();
+    const tokenMap = {};                       // { self, log, '<appId>': '...' }（加密存放，供回填）
+    if (selfToken) tokenMap.self = selfToken;
+    if (logToken) tokenMap.log = logToken;
+    (state.tokens || []).forEach((t) => {
+      if (t && t.appId && t.token) tokenMap[String(t.appId)] = String(t.token).trim();
+    });
+    // 多把 Token 以逗號串接於同一個 header（kintone 支援多 Token；本外掛以 10 把以內為限）。
+    const combined = [...new Set(Object.values(tokenMap).filter(Boolean))].join(',');
+
+    // ----- 2) 一般設定（getConfig 可讀）只保留非機密中繼資料，絕不含明文 Token -----
+    const publicState = Object.assign({}, state, {
+      selfAppToken: '',                        // 不再以明文存放
+      hasSelfToken: !!selfToken,               // 只留「有沒有設 Token」的旗標
+      logToken: '',                            // 不再以明文存放（logAppId 非機密，維持原樣）
+      hasLogToken: !!logToken,
+      tokens: (state.tokens || []).map((t) => {
+        const row = { appId: t.appId, appLabel: t.appLabel };
+        if (t && t.token) row.secured = true;  // 標記此 App 的 Token 已入加密儲存
+        return row;
+      }),
+    });
+
+    // ----- 3) 先寫加密代理設定，成功後才寫一般設定 -----
+    const jsonHeaders = combined
+      ? { 'Content-Type': 'application/json', 'X-Cybozu-API-Token': combined }
+      : { 'Content-Type': 'application/json' };
+    const getHeaders = combined ? { 'X-Cybozu-API-Token': combined } : {};
+
+    chainProxy([
+      [REST_PREFIX, 'GET',  getHeaders,  {}],
+      [REST_PREFIX, 'POST', jsonHeaders, {}],
+      [REST_PREFIX, 'PUT',  jsonHeaders, {}],
+      [TOKEN_MAP_URL, 'POST', {}, { map: JSON.stringify(tokenMap) }],
+    ], () => {
+      kintone.plugin.app.setConfig({ data: JSON.stringify(publicState) }, () => {
+        alert('設定已儲存，API Token 已加密存放於 kintone 伺服器（一般使用者無法讀取）。重新整理 App 後生效。');
+        window.location.href = `../../flow?app=${APP_ID}`;
+      });
     });
   };
 

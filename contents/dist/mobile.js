@@ -38,17 +38,34 @@
 
   Object.freeze(CONFIG);
 
-  const TOKENS = (CONFIG.tokens || []).reduce((m, t) => {
+  // ---------- TOKEN MODEL ----------
+  // API Token 一律不以明文存在設定檔（getConfig 可被任何使用者讀取）。正式作法：
+  // Token 存在外掛代理設定（setProxyConfig，加密於 kintone 伺服器），執行期以
+  // kintone.plugin.app.proxy() 由伺服器端注入，瀏覽器永遠看不到 Token。
+  // 這裡只保留「非機密」中繼資料：哪些 App 有設定 Token（用來決定要不要走代理）。
+  //
+  // 舊版相容：更新程式後、管理者尚未重新儲存設定前，設定檔仍可能帶有明文 Token。
+  // 此時沿用舊的 fetch 直送路徑，確保功能不中斷；管理者一旦重新儲存，Token 就會搬進
+  // 加密代理設定，之後這條舊路徑不再被觸發（RAW_* 皆為空）。
+  const LOG_APP = String(CONFIG.logAppId || '').trim();
+
+  const RAW_TOKENS = (CONFIG.tokens || []).reduce((m, t) => {
     if (t && t.appId && t.token) m[String(t.appId)] = t.token;
     return m;
   }, {});
+  const RAW_SELF_TOKEN = CONFIG.selfAppToken || '';
+  const RAW_LOG_TOKEN = String(CONFIG.logToken || '').trim();
+  if (LOG_APP && RAW_LOG_TOKEN) RAW_TOKENS[LOG_APP] = RAW_LOG_TOKEN;
 
-  const SELF_TOKEN = CONFIG.selfAppToken || '';
+  // 已搬進加密代理設定的目標 App（新版設定會在每個有 Token 的列標記 secured:true）
+  const SECURED_APP_IDS = new Set(
+    (CONFIG.tokens || []).filter((t) => t && t.appId && t.secured).map((t) => String(t.appId))
+  );
+  const HAS_SECURED_SELF = CONFIG.hasSelfToken === true;
+  if (LOG_APP && CONFIG.hasLogToken === true) SECURED_APP_IDS.add(LOG_APP);
 
-  const LOG_APP = String(CONFIG.logAppId || '').trim();
-  const LOG_TOKEN = String(CONFIG.logToken || '').trim();
-
-  if (LOG_APP && LOG_TOKEN) TOKENS[LOG_APP] = LOG_TOKEN;
+  // 本 App 是否有可用的補償 Token（明文舊值或加密新值皆算）— 決定是否啟用補償寫入流程
+  const HAS_SELF_TOKEN = !!RAW_SELF_TOKEN || HAS_SECURED_SELF;
 
   const APP_NS = (() => {
     try { return kintone.app; } catch (e) { return null; }
@@ -152,32 +169,66 @@
   const toISODate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const toHHmm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
+  // 帶權限的 REST API 呼叫（跨 App 寫入 / 補償寫入 / Log 寫入）。三種路徑依序判斷：
+  //   1) 舊版明文 Token 仍在設定檔（尚未遷移）→ 沿用 fetch 直送，維持相容。
+  //   2) Token 已加密存於代理設定 → 走 kintone.plugin.app.proxy，由伺服器端注入 Token，
+  //      前端拿不到也看不到（代理設定以「網址前置比對」注入，故 /k/v1/ 底下皆涵蓋）。
+  //   3) 該 App 沒有設定 Token → 用呼叫者本身的 session（kintone.api），行為與原本一致。
   const apiWithToken = async (path, method, body, appIdForToken) => {
-    const token = TOKENS[String(appIdForToken)] || (String(appIdForToken) === getAppId() ? SELF_TOKEN : '');
-    if (!token) return kintone.api(kintone.api.url(path, true), method, body);
-    const url = kintone.api.url(path, true);
-    const opts = {
-      method,
-      headers: { 'Content-Type': 'application/json', 'X-Cybozu-API-Token': token },
-    };
-    switch (method) {
-      case 'GET': {
+    const sApp = String(appIdForToken);
+    const isSelf = sApp === getAppId();
+
+    // 1) 舊版明文 Token（遷移前的相容路徑；遷移後 RAW_* 皆空，不會進來）
+    const rawToken = RAW_TOKENS[sApp] || (isSelf ? RAW_SELF_TOKEN : '');
+    if (rawToken) {
+      const url = kintone.api.url(path, true);
+      const opts = {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-Cybozu-API-Token': rawToken },
+      };
+      switch (method) {
+        case 'GET': {
+          const qs = new URLSearchParams();
+          Object.entries(body || {}).forEach(([k, v]) => {
+            if (Array.isArray(v)) v.forEach((x) => qs.append(`${k}[]`, x));
+            else qs.append(k, v);
+          });
+          const r = await fetch(`${url}?${qs}`, opts);
+          if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
+          return r.json();
+        }
+        default: {
+          opts.body = JSON.stringify(body);
+          const r = await fetch(url, opts);
+          if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
+          return r.json();
+        }
+      }
+    }
+
+    // 2) 加密代理路徑：Token 由 kintone 伺服器注入，前端完全不接觸
+    const secured = SECURED_APP_IDS.has(sApp) || (isSelf && HAS_SECURED_SELF);
+    if (secured) {
+      let url = kintone.api.url(path, true);
+      let data = body;
+      if (method === 'GET' || method === 'DELETE') {
+        // 代理對 GET / DELETE 會忽略 data，參數需放在 query string
         const qs = new URLSearchParams();
         Object.entries(body || {}).forEach(([k, v]) => {
           if (Array.isArray(v)) v.forEach((x) => qs.append(`${k}[]`, x));
           else qs.append(k, v);
         });
-        const r = await fetch(`${url}?${qs}`, opts);
-        if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
-        return r.json();
+        url = `${url}?${qs}`;
+        data = {};
       }
-      default: {
-        opts.body = JSON.stringify(body);
-        const r = await fetch(url, opts);
-        if (!r.ok) throw new Error(`API ${path} ${r.status}: ${await r.text()}`);
-        return r.json();
-      }
+      // proxy 回傳 [body(字串), status(數字), headers(物件)]；非 2xx 需自行判斷
+      const [respBody, status] = await kintone.plugin.app.proxy(PLUGIN_ID, url, method, {}, data);
+      if (status < 200 || status >= 300) throw new Error(`API ${path} ${status}: ${respBody}`);
+      return respBody ? JSON.parse(respBody) : {};
     }
+
+    // 3) 無 Token → 用呼叫者自身 session
+    return kintone.api(kintone.api.url(path, true), method, body);
   };
 
   const LOG_FIELDS = {
@@ -882,7 +933,7 @@
 
     if (!CONFIG.rules || CONFIG.rules.length === 0) return event;
 
-    const editCheckPromise  = (trigger === 'process.proceed' && SELF_TOKEN && record.$id?.value)
+    const editCheckPromise  = (trigger === 'process.proceed' && HAS_SELF_TOKEN && record.$id?.value)
       ? checkEditPermission(record.$id.value)
       : null;
 
@@ -912,7 +963,7 @@
 
     switch (trigger) {
       case 'process.proceed': {
-        if (touchedFields.length > 0 && SELF_TOKEN) {
+        if (touchedFields.length > 0 && HAS_SELF_TOKEN) {
           const recordId = record.$id && record.$id.value;
           const canEdit = editCheckPromise ? await editCheckPromise : await checkEditPermission(recordId);
           if (!canEdit) {
