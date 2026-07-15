@@ -305,6 +305,48 @@
         return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
       }));
 
+  // ===== 附件複製（copyAttachment）用：以 session 下載 binary、multipart 重新上傳 =====
+  // 說明：附件的 fileKey 是一次性下載 key，不能跨記錄寫入；要搬檔案只能「下載→重新上傳→取得新 key→寫入」。
+  //       binary/multipart 不吃外掛 proxy、加密 Token runtime 也讀不到，故此處一律走登入者 session
+  //       （呼叫者需對來源 App 有下載權、對目標 App 有上傳權——見 spec 2026-07-15-attachment-copy-design）。
+  const downloadFileBlob = async (fileKey) => {
+    const url = kintone.api.url('/k/v1/file.json', true) + '?fileKey=' + encodeURIComponent(fileKey);
+    const resp = await fetch(url, { method: 'GET', headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'include' });
+    if (!resp.ok) throw new Error(`file download ${resp.status}`);
+    return await resp.blob();
+  };
+
+  const uploadFileBlob = async (blob, name) => {
+    const form = new FormData();
+    form.append('file', blob, name || 'file');
+    const resp = await fetch(kintone.api.url('/k/v1/file.json', true), { method: 'POST', headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'include', body: form });
+    if (!resp.ok) throw new Error(`file upload ${resp.status}`);
+    const data = await resp.json();
+    return data.fileKey;
+  };
+
+  // 逐檔下載→重新上傳，回傳可寫入的新 fileKey 陣列 [{fileKey}]。單檔超過 maxFileSize 依 onError 跳過或中斷。
+  const copyAttachments = async (files, maxFileSize, onError) => {
+    const out = [];
+    for (const f of (files || [])) {
+      try {
+        if (f && Number(f.size) > maxFileSize) {
+          const msg = `附件「${f.name}」(${f.size} bytes) 超過上限 ${maxFileSize}`;
+          if (onError === 'block') throw new Error(msg);
+          console.warn('[sda] copyAttachment 跳過：' + msg);
+          continue;
+        }
+        const blob = await downloadFileBlob(f.fileKey);
+        const newKey = await uploadFileBlob(blob, f.name);
+        out.push({ fileKey: newKey });
+      } catch (e) {
+        if (onError === 'block') throw e;
+        console.warn(`[sda] copyAttachment 跳過檔案「${f && f.name}」：`, e.message || e);
+      }
+    }
+    return out;
+  };
+
   const resolveValue = async (spec, ctx) => {
     const { event, record } = ctx;
     let _resolvedValue;
@@ -439,6 +481,63 @@
         _resolvedValue = parts.join(sep);
         break;
       }
+      case 'copyAttachment': {
+        // 把來源記錄某附件欄位的「檔案本身」複製成可寫入的新 fileKey 陣列。僅 *.submit.success 生效。
+        const p = spec.valueParam || {};
+        const from = p.from || {};
+        const onErr = p.onError === 'block' ? 'block' : 'log';
+        const maxSize = Number(p.maxFileSize) || 10485760;
+        const mode = p.mode === 'append' ? 'append' : 'replace';
+        const srcField = from.attachmentField;
+
+        // 目標既有附件（writeOther 讀 targetRecord、writeSelf 讀本記錄），供 append 保留與空來源時的 no-op。
+        const existingField = ctx.isOther
+          ? (ctx.targetRecord && ctx.targetRecord[spec.targetField])
+          : record[spec.targetField];
+        const existingVal = (existingField && Array.isArray(existingField.value)) ? existingField.value : [];
+
+        if (!/\.submit\.success$/.test(ctx.trigger || '')) {
+          console.warn('[sda] copyAttachment 僅在 *.submit.success 生效，已略過');
+          _resolvedValue = existingVal;
+          break;
+        }
+        if (!srcField) {
+          console.warn('[sda] copyAttachment: from.attachmentField 未設定');
+          _resolvedValue = existingVal;
+          break;
+        }
+
+        // 取得來源檔案清單：本記錄（this）或跨 App 以 keyExpr 查一筆。
+        let srcFiles = [];
+        if (!from.app || from.app === 'this') {
+          const f = record[srcField];
+          srcFiles = (f && Array.isArray(f.value)) ? f.value : [];
+        } else {
+          const keyVal = String(from.keyExpr || '').replace(/\{([^}]+)\}/g, (_, c) => {
+            const ff = record[c.trim()];
+            return ff ? String(ff.value || '') : '';
+          });
+          const resp = await kintone.api(kintone.api.url('/k/v1/records.json', true), 'GET',
+            { app: from.app, query: `${from.keyField} = "${keyVal}" limit 1`, fields: [srcField] });
+          const rec0 = resp.records && resp.records[0];
+          srcFiles = (rec0 && rec0[srcField] && Array.isArray(rec0[srcField].value)) ? rec0[srcField].value : [];
+        }
+
+        if (srcFiles.length === 0) { _resolvedValue = existingVal; break; } // 來源空 → 不動目標
+
+        if (mode === 'append') {
+          // 既有下載 key 不可再寫入，保留既有檔案需重新上傳；以 檔名::大小 去重避免重跑重複附加。
+          const sig = (x) => `${x && x.name}::${x && x.size}`;
+          const existingSig = new Set(existingVal.map(sig));
+          const toCopy = srcFiles.filter((x) => !existingSig.has(sig(x)));
+          const keptExisting = await copyAttachments(existingVal, maxSize, 'log');
+          const copied = await copyAttachments(toCopy, maxSize, onErr);
+          _resolvedValue = [...keptExisting, ...copied];
+        } else {
+          _resolvedValue = await copyAttachments(srcFiles, maxSize, onErr);
+        }
+        break;
+      }
       default:
         console.warn('[sda] unknown valueSource', spec.valueSource);
         return null;
@@ -556,7 +655,10 @@
 
   const appendTextNeedsTarget = (m) => m && m.valueSource === 'appendText';
 
-  const ruleNeedsTargetRecord = (rule) => (rule.fieldMapping || []).some((m) => dateShiftNeedsTarget(m) || appendTextNeedsTarget(m));
+  // copyAttachment 的 append 模式需要目標既有附件，故要求 writeOther 撈整筆目標記錄（含附件欄位）。
+  const copyAttachmentNeedsTarget = (m) => m && m.valueSource === 'copyAttachment' && m.valueParam && m.valueParam.mode === 'append';
+
+  const ruleNeedsTargetRecord = (rule) => (rule.fieldMapping || []).some((m) => dateShiftNeedsTarget(m) || appendTextNeedsTarget(m) || copyAttachmentNeedsTarget(m));
 
   const classifyWrite = (existing, raw) => {
     if (raw && typeof raw === 'object' && raw.code && !Array.isArray(raw)) return 'userObject';
@@ -823,7 +925,10 @@
         }
 
         const raw = await resolveValue(rule, ctx);
-        const ok = writeToField(ctx.record, rule.targetField, raw, { append: rule.appendMode === true });
+        // copyAttachment 已於 valueParam.mode 內處理 replace/append，回傳的即為最終陣列，
+        // 不可再讓 writeToField 依 appendMode 二次合併（會混入不可寫入的舊下載 key）。
+        const appendOpt = rule.valueSource === 'copyAttachment' ? false : (rule.appendMode === true);
+        const ok = writeToField(ctx.record, rule.targetField, raw, { append: appendOpt });
         return;
       }
     }
@@ -1242,6 +1347,69 @@
 
   window.NXSdaProceed = window.NXSdaProceed || { run: runProceedRulesViaApi };
 
+  // ===== 對外暴露：以外掛加密儲存的 API Token 代理呼叫 kintone REST API =====
+  // 背景：純 JavaScript 自訂（非外掛）無法使用 kintone.plugin.app.proxy，因此無法安全存取
+  //       「登入者本身無權限、需以 App Token 存取」的 App（例如分攤表 619）。本外掛已把 Token
+  //       加密存於代理設定（setProxyConfig）；此函式讓 App 端以「呼叫外掛」的方式取得資料，
+  //       Token 由 kintone 伺服器端在轉發時注入，永遠不進入瀏覽器（前端拿到的是資料，不是 Token）。
+  //
+  // 用法（回傳已解析的 JSON；失敗時 throw）：
+  //   const data = await window.NXSdaApi.call('/k/v1/record.json', 'GET', { app: 619, id: 12 }, 619);
+  //   await window.NXSdaApi.call('/k/v1/record.json', 'PUT', { app: 619, id: 12, record: {...} }, 619);
+  //
+  // appIdForToken：決定用哪個 App 的 Token（需先在設定畫面登錄該 App 的 Token）。
+  //   未登錄 Token 的 App 會自動退回登入者 session（等同直接 kintone.api）。
+  //   安全提醒：此 helper 的可及範圍 = 外掛已登錄 Token 的所有 App，請只登錄前端真正需要的 App。
+  window.NXSdaApi = window.NXSdaApi || { call: (path, method, body, appIdForToken) => apiWithToken(path, method, body, appIdForToken) };
+
+  // ===== submit.success 觸發：存檔完成後再跑規則（本表 / 跨 App）=====
+  // 背景：create.submit / edit.submit 在「存檔前」執行，新增時記錄還沒有 $id，無法把「這筆新記錄的編號」
+  //       回寫到來源單據。submit.success 在「存檔後」執行，此時 event.recordId 已存在，適合做這種回寫。
+  //       本函式比照 runProceedRulesViaApi：以 API 重取整筆記錄（含 $id / 完整子表 / 附件），跑命中的規則，
+  //       本表變更以 API PUT 落地（success 階段 event.record 已無法直接改存），跨 App 走 runWriteOther。
+  // 防禦：整段包在 try/catch，任何錯誤只記 console，絕不影響已完成的存檔（success 事件不應中斷）。
+  const runSuccessRules = async (trigger, ev) => {
+    try {
+      if (!CONFIG.rules || CONFIG.rules.length === 0) return;
+      const recordId = ev.recordId || (ev.record && ev.record.$id && ev.record.$id.value);
+      if (!recordId) return;
+
+      const appId = getAppId();
+      const getResp = await apiWithToken('/k/v1/record.json', 'GET', { app: appId, id: recordId }, appId);
+      const record = getResp.record;
+      if (!record) return;
+
+      const event = { type: ev.type, record };
+      const ctx = { event, record, trigger };
+
+      const matched = (CONFIG.rules || []).filter((r) =>
+        r.enabled !== false && triggerMatches(r, trigger) && statusMatches(r, event, record, trigger)
+      );
+      if (matched.length === 0) return;
+
+      const selfRules = matched.filter((r) => r.action !== 'writeOther');
+      const otherRules = matched.filter((r) => r.action === 'writeOther');
+
+      const touchedFields = [];
+      for (const rule of selfRules) {
+        await runWriteSelf(rule, ctx);
+        if (rule.targetField) touchedFields.push(rule.targetField);
+      }
+      const uniqueFields = [...new Set(touchedFields)];
+      if (uniqueFields.length > 0) {
+        const changed = snapshotFields(record, uniqueFields);
+        await apiWithToken('/k/v1/record.json', 'PUT', { app: appId, id: recordId, record: changed }, appId);
+      }
+
+      for (const rule of otherRules) {
+        try { await runWriteOther(rule, ctx); }
+        catch (e) { console.error(`[sda] success cross-app rule "${rule.label || rule.id}" failed`, e); }
+      }
+    } catch (e) {
+      console.error('[sda] runSuccessRules failed', e);
+    }
+  };
+
   const E = (names) => names.flatMap((n) => [`app.record.${n}`, `mobile.app.record.${n}`]);
 
   kintone.events.on(E(['create.show']),
@@ -1272,9 +1440,9 @@
 
   kintone.events.on(E(['detail.process.proceed']), loggedApply('process.proceed'));
 
-  kintone.events.on(E(['create.submit.success']), async (ev) => { await flushSubmitLog(ev); return ev; });
+  kintone.events.on(E(['create.submit.success']), async (ev) => { await flushSubmitLog(ev); await runSuccessRules('create.submit.success', ev); return ev; });
 
-  kintone.events.on(E(['edit.submit.success']), async (ev) => { await flushSubmitLog(ev); return ev; });
+  kintone.events.on(E(['edit.submit.success']), async (ev) => { await flushSubmitLog(ev); await runSuccessRules('edit.submit.success', ev); return ev; });
 
   kintone.events.on(E(['detail.show']),
     safeHandler(handleDetailShow)

@@ -646,6 +646,14 @@
   - 現有值讀取來源依動作而異：`writeSelf` 讀 `ctx.record[targetField]`（本記錄）；`writeOther` 讀 `ctx.targetRecord[targetField]`——只有 `update`／`upsert` 命中既有記錄時才有 `targetRecord`，故 `ruleNeedsTargetRecord` 已納入 `appendText` 判斷（見 B-11），確保這種情況下 GET 會抓整筆而非只抓 `$id`；`upsert` 未命中改走 `create` 時無既有記錄可讀，視為空值，直接寫入新值本身（不加分隔字元）。
   - 目標欄位型別須為文字類（`SINGLE_LINE_TEXT`／`MULTI_LINE_TEXT`）；若目標欄位實際是陣列型（CHECK_BOX 等），`appendText` 算出的字串仍會整串塞進 `classifyWrite` 判定的陣列分割規則，語意上不建議混用——陣列型欄位請改用既有的 `appendMode`（見 B-9）。
   - 與 `skipIfFilled` 併用時：`skipIfFilled` 在目標欄位已有值時會讓整條規則直接跳過（含 `appendText` 本身），等同「只在第一次寫入」，不會進到附加判斷；如需「每次都嘗試附加去重」，`skipIfFilled` 應設為 `false`（或不設）。
+- **`copyAttachment`**（v1.14.0，**附件檔案複製**，**限 `*.submit.success` 觸發**）：`{ from, mode?, maxFileSize?, onError? }`。把來源附件欄位的**檔案本身**複製到目標附件欄位。設計背景與 kintone 限制見 spec `docs/superpowers/specs/2026-07-15-attachment-copy-design.md`。
+  - `from`：來源。`{ app, keyField, keyExpr, attachmentField }`。`app` 省略或 `"this"`＝本記錄；否則以 `keyExpr`（`{欄位代碼}` 代換本記錄值）在 `app` 查一筆、讀 `attachmentField`。
+  - 目標＝此規則的「目標欄位」（附件欄位）；`writeSelf` 寫本記錄、`writeOther` 寫目標 App 那筆。
+  - `mode`：`replace`（預設，覆蓋）／`append`（附加）。附加時**既有檔案會重新上傳保留**（既有下載 key 不可再寫入），並以 `檔名::大小` 去重避免重跑重複附加；`copyAttachment` 一律不吃 `appendMode`（`runWriteSelf` 對此 valueSource 強制 `append:false`），模式只看 `valueParam.mode`。
+  - `maxFileSize`：單檔上限 bytes，預設 10485760（10MB）；超過依 `onError` 跳過或中斷。`onError`：`log`（預設，跳過該檔續跑）／`block`（整條規則失敗）。
+  - **來源無檔案時不動目標**（回傳目標現有值）；非 `*.submit.success` 觸發時只記 `console.warn` 並不動目標。
+  - **認證＝登入者 session**：附件的 binary 下載（`GET /k/v1/file.json`）與 multipart 上傳（`POST /k/v1/file.json`）**都不經外掛 proxy／Token**（proxy 不吃 binary/multipart、加密 Token runtime 讀不到），一律用 `fetch` + `credentials:'include'` + `X-Requested-With`。⇒ **執行者需對來源 App 有下載權、對目標 App 有上傳權**；若對來源無權限則做不到（需後端，非本外掛範疇）。
+  - `append` 需目標既有附件，故 `ruleNeedsTargetRecord` 已納入 `copyAttachment(mode:append)`（見 B-11），確保 `writeOther` 撈整筆目標記錄含附件欄位。
 - **`elapsedMinutes`**（僅用於 `appendSubtable` 的 subRules 內）：`{ sinceField: '執行日時' }`，回傳距上一列該時間欄位的分鐘數；第一列回 0。
 - **`readonly`**：唯讀鎖定，僅 `*.show` 時機有意義（v1.9.0 起依觸發事件分兩種機制）：
   - `index.edit.show`（一覽表內編輯列）：直接對 `ctx.record[targetField].disabled = true` 賦值——欄位仍顯示在該列，但輸入框變灰階不可編輯。`kintone.app.record.setFieldShown` 在一覽表編輯列沒有對應元素，故不適用。
@@ -728,6 +736,52 @@
 - 設定頁工具列加 `exportConfig` / `importConfig` 兩鈕（皆呼叫 `openTextModal` 自製覆蓋層 modal，內含 readonly/可編輯 `textarea`，不依賴 `prompt`）。
 - **匯出**：`JSON.stringify(state, null, 2)` → `navigator.clipboard.writeText`（失敗則退回手動全選複製），同時開 readonly modal 顯示。內容**含 API Token**（與 B-12「不可 `console.log` config」同等敏感，匯出檔請當機密處理）。
 - **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules），`confirm` 後 `state.rules = rules` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。匯入後僅改記憶體 `state`，按「儲存」才 `setConfig` 落地。
+
+### B-12c. 存檔後觸發 `*.submit.success`（v1.13.0）
+
+`create.submit.success` / `edit.submit.success` 除了原本寫 Log，現在也會跑 `runSuccessRules`，可當成一般規則的觸發時機。
+
+- **用途**：`create.submit` / `edit.submit` 在「存檔前」執行，新增時記錄尚無 `$id`，無法把「這筆新記錄的編號」回寫來源單。`*.submit.success` 在「存檔後」執行，`event.recordId` 已存在，適合這種回寫（例如把本筆請款單的 `$id` 追加到來源請購單的「請款單據編號」欄位）。
+- **執行方式**：比照 `runProceedRulesViaApi`——以 API 重取整筆記錄（含 `$id`、完整子表、附件欄位），跑命中規則；本表 `writeSelf` 變更以 API `PUT` 落地（success 階段 `event.record` 已無法直接改存），跨 App `writeOther` 照常。全段包在 try/catch，任何錯誤只記 console，**絕不中斷已完成的存檔**。
+- **設定畫面**：觸發時機新增「新增存檔後」「編輯存檔後」兩個複選項，自成一組（`submitSuccess`），與「顯示類 / 儲存前」不可混選。
+- **狀態條件**：走 `statusMatches` 的 default 分支，以 `statusCond` 比對當前記錄的「狀態」（與 `edit.submit` 相同；無流程管理的 App 用 `*` 即全部命中）。
+- **回寫來源單範例**（把本筆 `$id` 追加到來源 App 的「請款單據編號」，以「來源單號」為 key）：
+
+```json
+{
+  "rules": [
+    {
+      "label": "請款存檔後→回寫請款單號到來源請購單(135)",
+      "enabled": true,
+      "trigger": "create.submit.success,edit.submit.success",
+      "statusCond": "*",
+      "conditions": [ { "field": "類型", "op": "eq", "value": "請購單➞請款單" } ],
+      "action": "writeOther",
+      "writeMode": "update",
+      "targetApp": "135",
+      "keyMapping":  [ { "targetField": "請購單據編號", "valueSource": "fieldCopy", "valueParam": "請購單據編號" } ],
+      "fieldMapping": [ { "targetField": "請款單據編號", "valueSource": "appendText",
+        "valueParam": { "value": { "valueSource": "recordId" }, "separator": " / ", "dedup": true } } ],
+      "onError": "log"
+    }
+  ]
+}
+```
+
+> 三個來源 App（135 請購 / 274 庶務 / 588 出差）各設一條、以 `類型` 條件區分、`targetApp` 對應改掉即可。需先在設定畫面登錄各來源 App 的 Token（`writeOther` 由外掛伺服器端注入）。
+
+### B-12b. 對外暴露的全域 helper（供 App 自訂 JS 呼叫）
+
+外掛在 `window` 上掛兩個具名 helper，讓**同頁的純 JavaScript 自訂**（非外掛程式碼）也能借用外掛能力。兩者都在 runtime 載入時掛載，App 端呼叫前建議先判斷是否存在。
+
+- **`window.NXSdaProceed.run({ recordId, action, fromStatus, toStatus })`**（v1.9.0）
+  以 REST API 推進流程時，kintone 不送 `process.proceed` 事件，本表掛在該事件的規則（含簽核履歷 `appendSubtable`）不會執行。呼叫此函式即以「同一份規則」補建並寫入該筆 row。回傳 `{ matched, written }`。本表寫入優先用 `selfAppToken`，避開推進後使用者已無編輯權的問題。
+
+- **`window.NXSdaApi.call(path, method, body, appIdForToken)`**（v1.12.0）
+  讓 App 端以「呼叫外掛」的方式，用外掛**加密儲存的 API Token** 存取 kintone REST API。Token 由伺服器端在轉發時注入，**前端拿到的是資料、永遠拿不到 Token**。內部即 `apiWithToken`（三路徑：舊版明文 Token → 加密 proxy → 無 Token 退回 session）。回傳已解析 JSON，失敗時 throw。
+  - 典型用途：純 JS 自訂需存取「登入者無權限、需 Token」的 App（例如分攤表 619 的讀取／寫回）。純 JS 自訂無法直接用 `kintone.plugin.app.proxy`，故透過此 helper 借道。
+  - 範例：`const data = await window.NXSdaApi.call('/k/v1/record.json', 'GET', { app: 619, id: 12 }, 619);`
+  - **安全範圍**：此 helper 可及範圍 = 外掛已登錄 Token 的所有 App。請只在設定畫面登錄前端真正需要的 App Token（kintone Token 本身即單一 App 綁定，未登錄的 App 會自動退回 session）。
 
 ### B-13. 重新打包
 
