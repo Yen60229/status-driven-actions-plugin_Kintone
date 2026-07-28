@@ -49,6 +49,8 @@
   // 加密代理設定，之後這條舊路徑不再被觸發（RAW_* 皆為空）。
   const LOG_APP = String(CONFIG.logAppId || '').trim();
 
+  const DIALOG_STYLE = CONFIG.dialogStyle || {};
+
   const RAW_TOKENS = (CONFIG.tokens || []).reduce((m, t) => {
     if (t && t.appId && t.token) m[String(t.appId)] = t.token;
     return m;
@@ -934,6 +936,44 @@
     }
   };
 
+  const CANCEL_MESSAGE_DEFAULT = '已取消操作。';
+
+  const interpolateFields = (text, record) => String(text == null ? '' : text).replace(/\{([^}]+)\}/g, (_, code) => {
+    const c = code.trim();
+    const f = record && record[c];
+    if (!f) {
+      console.warn(`[sda][dialog] 訊息中的欄位代碼 "${c}" 在本記錄找不到，已代成空字串`);
+      return '';
+    }
+    const v = f.value;
+    if (Array.isArray(v)) {
+      return v.map((x) => (x && typeof x === 'object') ? String(x.name || x.code || '') : String(x)).join('、');
+    }
+    return v == null ? '' : String(v);
+  });
+
+  // 只有「kintone 會等 handler 回傳 Promise」的時機，按取消才真的擋得住動作。
+  // *.show 畫面已渲染完、*.submit.success 記錄已存檔，兩者都攔不住，一律當純提醒（取消鍵不顯示）。
+  const runDialog = async (rule, ctx) => {
+    if (!window.SdaDialog) {
+      console.warn('[sda][dialog] SdaDialog 未載入，規則已略過');
+      return true;
+    }
+    const d = rule.dialog || {};
+    const blockable = !ctx.noBlock &&
+      (ctx.trigger === 'process.proceed' || /\.submit$/.test(ctx.trigger || ''));
+    const cancelLabel = blockable ? String(d.cancelLabel || '').trim() : '';
+    return window.SdaDialog.show({
+      icon: d.icon || 'warn',
+      title: interpolateFields(d.title, ctx.record),
+      text: interpolateFields(d.text, ctx.record),
+      confirmLabel: d.confirmLabel || 'OK',
+      cancelLabel,
+      accent: d.accent,
+      style: DIALOG_STYLE,
+    });
+  };
+
   const buildOtherPayload = async (rule, ctx) => {
     const payload = {};
     const errs = [];
@@ -1083,6 +1123,17 @@
 
     for (const rule of selfRules) {
       try {
+        if (rule.action === 'dialog') {
+          const confirmed = await runDialog(rule, ctx);
+          if (!confirmed) {
+            const label = rule.label || rule.id;
+            const message = String((rule.dialog && rule.dialog.cancelMessage) || '').trim() || CANCEL_MESSAGE_DEFAULT;
+            _runInfo.cancelled = { rule: label, message };
+            event.error = message;
+            return event;
+          }
+          continue;
+        }
         await runWriteSelf(rule, ctx);
         if (rule.targetField && rule.action !== 'writeOther') touchedFields.push(rule.targetField);
       } catch (e) {
@@ -1218,6 +1269,20 @@
     const errored = !!(ev && ev.error);
     if (!LOG_APP) return out;
 
+    // 使用者在提醒視窗按取消：是正常操作而非系統錯誤，分開記為「取消」，不污染錯誤統計。
+    if (errored && _runInfo.cancelled) {
+      const c = _runInfo.cancelled;
+      try {
+        await writeLog({
+          ev, trigger, result: '取消', category: 'cancelled',
+          message: `規則「${c.rule}」的提醒視窗被使用者取消：${c.message}`,
+        });
+      } catch (e) {
+        console.error('[sda] writeLog failed', e);
+      }
+      return out;
+    }
+
     // 失敗：規則出錯擋下動作（含丟例外）。proceed 與 submit 皆於此即時記錄。
     if (errored && (_runInfo.matched > 0 || thrown)) {
       const info = _runInfo.error;
@@ -1324,6 +1389,8 @@
     // 4. 跑本表規則（appendSubtable 會把新列 push 進 record[targetField].value）
     const touchedFields = [];
     for (const rule of selfRules) {
+      // 狀態已由 API 推進完畢，此路徑的提醒視窗一律無法中止，故強制 noBlock。
+      if (rule.action === 'dialog') { await runDialog(rule, { ...ctx, noBlock: true }); continue; }
       await runWriteSelf(rule, ctx);
       if (rule.targetField) touchedFields.push(rule.targetField);
     }
@@ -1392,6 +1459,7 @@
 
       const touchedFields = [];
       for (const rule of selfRules) {
+        if (rule.action === 'dialog') { await runDialog(rule, ctx); continue; }
         await runWriteSelf(rule, ctx);
         if (rule.targetField) touchedFields.push(rule.targetField);
       }

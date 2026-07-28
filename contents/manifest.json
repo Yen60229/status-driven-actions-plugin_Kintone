@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "version": "1.14.0",
+  "version": "1.15.0",
   "type": "APP",
   "name": {
     "ja": "ステータス駆動アクションプラグイン",
@@ -22,14 +22,14 @@
   },
   "icon": "source/image/icon.png",
   "desktop": {
-    "js": ["dist/desktop.js"]
+    "js": ["dist/dialog.js", "dist/desktop.js"]
   },
   "mobile": {
-    "js": ["dist/mobile.js"]
+    "js": ["dist/dialog.js", "dist/mobile.js"]
   },
   "config": {
     "html": "source/html/config.html",
-    "js": ["3rd_parties/kintone-config-helper.js", "dist/config.js"],
+    "js": ["3rd_parties/kintone-config-helper.js", "dist/dialog.js", "dist/config.js"],
     "css": ["source/css/config.css"],
     "required_params": []
   }

@@ -25,6 +25,7 @@ status-driven-actions-plugin/
 │   ├── dist/
 │   │   ├── desktop.js        ← 執行期 runtime（電腦版）
 │   │   ├── mobile.js         ← 與 desktop.js 內容【完全相同】
+│   │   ├── dialog.js         ← 提醒視窗元件，desktop/mobile/config【三邊共用，不複製】
 │   │   └── config.js         ← 設定畫面（純 JS 渲染到 #ui-section）
 │   ├── source/
 │   │   ├── html/config.html  ← 設定畫面外殼
@@ -45,6 +46,8 @@ status-driven-actions-plugin/
    只改 `desktop.js`，然後把同樣內容覆蓋到 `mobile.js`。改完務必驗證：
    `diff contents/dist/desktop.js contents/dist/mobile.js` 應無輸出。
    （單一檔案同時註冊 `app.record.*` 與 `mobile.app.record.*` 事件，kintone 自動忽略不符當前平台的事件名稱。）
+
+   ⚠ **`dialog.js` 不在此規則內**——它是 desktop / mobile / config 三邊共用的同一個檔案（`manifest.json` 三個 js 陣列都列它），改一次三邊都生效，**不要複製它**。設定畫面的「預覽」呼叫的就是 runtime 的 `SdaDialog.show()`，這是刻意的：預覽與實際不可能不一致。
 
 2. **絕不可 `console.log` 原始 config。** `rawConfig.data` 內含 API Token，會洩漏給所有開 DevTools 的使用者。見 [README.md 附錄 B-12](README.md)。
 
@@ -92,6 +95,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
 | 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
 | 觸發複選 | `triggerMatches`／`statusMatches` 依實際觸發事件分流；`rule.trigger` 可逗號分隔複選（v1.9.0） | B-10b |
+| 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`） | B-14 |
 | 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算）；`buildOtherPayload` 回傳 `{payload,suspects}`，`fieldCopy` 來源欄位不存在／`dateShift` 空值時標記可疑；`badFieldsFromError` 解析 kintone `errors` 指名欄位 | B-11 |
 | 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；觸發時機用 `triggerCheckboxGroup` 複選（v1.9.0）；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
@@ -106,8 +110,8 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ### 匯入規則（重要）
 
-- 設定畫面的「**匯入設定**」**只套用 `rules`**，**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`（避免把來源 App 的 Token／App ID 誤帶過去）。
-- 因此自動產生時，**只要輸出 `rules`**即可。可給下列任一形狀：
+- 設定畫面的「**匯入設定**」只套用 `rules` 與 `dialogStyle`（v1.15.0），**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`（避免把來源 App 的 Token／App ID 誤帶過去）。
+- 因此自動產生時，**只要輸出 `rules`**即可（有提醒視窗規則且想指定外觀時再加 `dialogStyle`）。可給下列任一形狀：
   - `{ "rules": [ ...規則... ] }`
   - 或直接一個陣列 `[ ...規則... ]`
 - 欄位一律填 **kintone 欄位代碼（Field Code）**，不是顯示名稱。狀態名稱要與 kintone 流程設定**完全一致**（全形半形、空白都算）。
@@ -123,6 +127,11 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
   ],
   "logAppId": "",                 // 執行 Log App ID（匯入不覆蓋）
   "logToken": "",                 // Log App Token（匯入不覆蓋）
+  "dialogStyle": {                // 提醒視窗全域外觀（v1.15.0；非機密，匯入【會】覆蓋）
+    "width": 420, "fontSize": 14, "lineHeight": 1.9, "titleSize": 20,
+    "radius": 12, "overlay": 0.45, "accent": "#f5a623",
+    "buttonColor": "#7b68ee", "align": "left", "customCss": ""
+  },
   "rules": [ /* Rule[]，見下 */ ]
 }
 ```
@@ -150,7 +159,19 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
   "conditionLogic": "AND",        // 選填 AND(預設)/OR
 
   // ── 動作 ──
-  "action": "writeSelf",          // writeSelf=寫本記錄 / writeOther=寫其他 App
+  "action": "writeSelf",          // writeSelf=寫本記錄 / writeOther=寫其他 App / dialog=跳提醒視窗
+
+  // action=dialog 時（v1.15.0）：不寫欄位，跳視窗並等使用者按確定，之後才跑排在它下面的規則
+  "dialog": {
+    "icon": "warn",               // warn|info|success|error|question|none
+    "title": "提醒",
+    "text": "※ 憑證請寫上單號【{請款單編號}】",  // 純文字，換行原樣保留；{欄位代碼} 會代入
+    "confirmLabel": "OK",
+    "cancelLabel": "",            // 留空=只有確定鍵；填了才有取消鍵（僅 *.submit / process.proceed 有效）
+    "cancelMessage": "已取消操作。",
+    "accent": ""                  // 留空=用全域 dialogStyle.accent
+  },
+
 
   // action=writeSelf 時：
   "targetField": "核准日期",       // 目標欄位代碼

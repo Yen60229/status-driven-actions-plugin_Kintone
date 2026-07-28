@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.14.0';
+  const UI_VERSION = '1.15.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -14,6 +14,12 @@
   if (state.selfAppToken === undefined) state.selfAppToken = '';
   if (state.logAppId === undefined) state.logAppId = '';
   if (state.logToken === undefined) state.logToken = '';
+
+  const DEFAULT_DIALOG_STYLE = (window.SdaDialog && window.SdaDialog.DEFAULT_STYLE) || {
+    width: 420, fontSize: 14, lineHeight: 1.9, titleSize: 20, radius: 12,
+    overlay: 0.45, accent: '#f5a623', buttonColor: '#7b68ee', align: 'left', customCss: '',
+  };
+  state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, state.dialogStyle || {});
 
   // ----- SECURE TOKEN STORAGE -----
   // Token 存放於外掛代理設定（加密於 kintone 伺服器，只有本設定頁能透過 getProxyConfig 讀回；
@@ -85,6 +91,15 @@
   };
 
   const triggerListOf = (r) => String(r.trigger || '').split(',').map((s) => s.trim()).filter(Boolean);
+  const isSubmitSuccessOnlyTrigger = (r) => {
+    const list = triggerListOf(r);
+    return list.length > 0 && list.every((v) => TRIGGER_GROUPS[v] === 'submitSuccess');
+  };
+  const ruleUsesCopyAttachment = (r) => {
+    if (r.action === 'writeSelf') return r.valueSource === 'copyAttachment';
+    if (r.action === 'writeOther') return (r.fieldMapping || []).some((m) => m && m.valueSource === 'copyAttachment');
+    return false;
+  };
 
   const VALUE_SOURCES = [
     { v: 'fixed',          l: '固定值' },
@@ -138,7 +153,29 @@
   const ACTIONS = [
     { v: 'writeSelf',  l: '寫入本記錄欄位' },
     { v: 'writeOther', l: '寫入其他 App 記錄' },
+    { v: 'dialog',     l: '跳出提醒視窗（按確定後才繼續）' },
   ];
+
+  const DIALOG_ICONS = [
+    { v: 'warn',     l: '!  驚嘆號（提醒 / 警告）' },
+    { v: 'info',     l: 'i  資訊' },
+    { v: 'success',  l: '✓  完成' },
+    { v: 'error',    l: '✕  錯誤 / 禁止' },
+    { v: 'question', l: '?  詢問' },
+    { v: 'none',     l: '（不顯示圖示）' },
+  ];
+
+  const DIALOG_ALIGNS = [
+    { v: 'left',   l: '靠左（多行條列建議）' },
+    { v: 'center', l: '置中（短句建議）' },
+  ];
+
+  // 只有這些時機 kintone 會等 handler 的 Promise，按取消才真的攔得住動作。
+  const triggerCanBlock = (t) => t === 'process.proceed' || /\.submit$/.test(t);
+  const ruleCanBlock = (r) => {
+    const list = triggerListOf(r);
+    return list.length > 0 && list.every(triggerCanBlock);
+  };
 
   const WRITE_MODES = [
     { v: 'create', l: '新增' },
@@ -195,6 +232,26 @@
     t.value = value == null ? '' : (typeof value === 'string' ? value : JSON.stringify(value, null, 2));
     t.addEventListener('input', (e) => onChange(e.target.value));
     return t;
+  };
+
+  const bigTextarea = (value, onChange, placeholder, rows) => {
+    const t = el('textarea', { placeholder, rows: String(rows || 8) });
+    t.value = value == null ? '' : String(value);
+    t.addEventListener('input', (e) => onChange(e.target.value));
+    return t;
+  };
+
+  const colorPicker = (current, fallback, onChange) => {
+    const c = el('input', { type: 'color' });
+    c.style.width = '46px';
+    c.style.height = '30px';
+    c.style.padding = '0';
+    c.style.border = '1px solid #cbd2d9';
+    c.style.borderRadius = '5px';
+    c.style.cursor = 'pointer';
+    c.value = /^#[0-9a-fA-F]{6}$/.test(String(current || '')) ? current : fallback;
+    c.addEventListener('input', (e) => onChange(e.target.value));
+    return c;
   };
 
   const checkbox = (value, onChange, label) => {
@@ -405,6 +462,111 @@
     root.appendChild(renderTokensSection());
     root.appendChild(renderRulesSection());
     root.appendChild(renderLogSection());
+    root.appendChild(renderDialogStyleSection());
+  };
+
+  // 預覽走的是 runtime 同一支 SdaDialog.show，所以預覽長什麼樣、使用者就看到什麼樣。
+  // 差別只有 {欄位代碼} 這裡沒有實際記錄可代入，改顯示成〔欄位代碼〕讓管理者看得出位置。
+  const previewDialogRule = (r) => {
+    if (!window.SdaDialog) { alert('提醒視窗元件未載入，請重新整理設定畫面。'); return; }
+    const d = r.dialog || {};
+    const demo = (s) => String(s == null ? '' : s).replace(/\{([^}]+)\}/g, (_, c) => `〔${c.trim()}〕`);
+    window.SdaDialog.show({
+      icon: d.icon || 'warn',
+      title: demo(d.title),
+      text: demo(d.text) || '（尚未輸入內文）',
+      confirmLabel: d.confirmLabel || 'OK',
+      cancelLabel: ruleCanBlock(r) ? (d.cancelLabel || '') : '',
+      accent: d.accent,
+      style: state.dialogStyle,
+    });
+  };
+
+  const SAMPLE_DIALOG_TEXT =
+    '※　請將同一筆請款單之傳統紙本發票及收據正本\n' +
+    '　　① 釘起(或夾成)一份\n' +
+    '　　② 首張憑證寫上請款單編號〔請款單編號〕\n' +
+    '　　③ 盡速寄交會計課承辦\n\n' +
+    '※　有收據及傳統紙本發票的請款單，\n' +
+    '　　會計課於收到正本後方能執行請款作業';
+
+  const renderDialogStyleSection = () => {
+    const sec = el('section', { class: 'sda-section' });
+    sec.appendChild(el('h3', { class: 'sda-section-title' }, ['4. 提醒視窗外觀（全域）']));
+    sec.appendChild(el('p', { class: 'sda-section-help' }, [
+      '所有「跳出提醒視窗」規則共用這一組外觀；個別規則可另外覆寫圖示與強調色。' +
+      '這組設定會隨「匯出／匯入設定」一起帶到其他 App。'
+    ]));
+
+    const grid = el('div', { class: 'sda-rule-grid' });
+    const addRow = (label, control) => {
+      grid.appendChild(el('div', { class: 'sda-row-label' }, [label]));
+      grid.appendChild(control);
+    };
+    const s = state.dialogStyle;
+
+    const numRow = (label, key, step, hint) => {
+      const i = el('input', { type: 'number' });
+      if (step) i.setAttribute('step', step);
+      i.value = s[key];
+      i.addEventListener('input', (e) => { s[key] = e.target.value === '' ? '' : Number(e.target.value); });
+      if (!hint) { addRow(label, i); return; }
+      const wrap = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } });
+      i.style.width = '120px';
+      wrap.appendChild(i);
+      wrap.appendChild(el('span', { style: { fontSize: '12px', color: '#6b7480' } }, [hint]));
+      addRow(label, wrap);
+    };
+
+    const colorRow = (label, key, hint) => {
+      const wrap = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } });
+      const txt = textInput(s[key], (v) => { s[key] = v.trim(); }, '#f5a623');
+      txt.style.width = '120px';
+      wrap.appendChild(colorPicker(s[key], DEFAULT_DIALOG_STYLE[key], (v) => { s[key] = v; txt.value = v; }));
+      wrap.appendChild(txt);
+      if (hint) wrap.appendChild(el('span', { style: { fontSize: '12px', color: '#6b7480' } }, [hint]));
+      addRow(label, wrap);
+    };
+
+    numRow('視窗寬度 (px)', 'width', '10', '實際寬度取 min(此值, 92vw)，手機會自動縮');
+    numRow('內文字級 (px)', 'fontSize', '1');
+    numRow('內文行高', 'lineHeight', '0.1', '1.9 ≈ 條列式提醒的舒適行距');
+    numRow('標題字級 (px)', 'titleSize', '1');
+    numRow('圓角 (px)', 'radius', '1');
+    numRow('背景遮罩深淺', 'overlay', '0.05', '0＝完全透明，1＝全黑');
+    addRow('內文對齊', select(DIALOG_ALIGNS, s.align, (v) => { s.align = v; }));
+    colorRow('預設強調色', 'accent', '圖示的圈線與符號顏色');
+    colorRow('確定鍵顏色', 'buttonColor');
+
+    addRow('進階：自訂 CSS', bigTextarea(s.customCss, (v) => { s.customCss = v; },
+      '選填。會接在外掛產生的樣式後面，可覆寫任何細節。可用的選擇器：\n' +
+      '.sda-dlg-overlay（遮罩）\n.sda-dlg（視窗本體）\n.sda-dlg-icon（圖示圈）\n' +
+      '.sda-dlg-title（標題）\n.sda-dlg-text（內文）\n.sda-dlg-btn / .sda-dlg-ok / .sda-dlg-cancel（按鈕）\n\n' +
+      '例：.sda-dlg-title { letter-spacing: .1em; }', 7));
+    sec.appendChild(grid);
+
+    const btnRow = el('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } });
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn sda-btn-copy',
+      onclick: () => {
+        if (!window.SdaDialog) { alert('提醒視窗元件未載入，請重新整理設定畫面。'); return; }
+        window.SdaDialog.show({
+          icon: 'warn', title: '提醒', text: SAMPLE_DIALOG_TEXT,
+          confirmLabel: 'OK', cancelLabel: '', style: s,
+        });
+      },
+    }, ['👁 用範例文字預覽']));
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn',
+      onclick: () => {
+        if (!confirm('要把提醒視窗外觀還原成預設值嗎？（自訂 CSS 也會被清空）')) return;
+        state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE);
+        render();
+      },
+    }, ['還原預設外觀']));
+    sec.appendChild(btnRow);
+
+    return sec;
   };
 
   const renderLogSection = () => {
@@ -497,7 +659,9 @@
     sec.appendChild(el('h3', { class: 'sda-section-title' }, ['2. 規則列表']));
     sec.appendChild(el('p', { class: 'sda-section-help' }, [
       '規則由上而下依序執行；後寫的會覆蓋前寫的。' +
-      '「寫入其他 App」只在 submit / process.proceed 時機觸發；*.show 時機只跑「寫入本記錄」/ 唯讀鎖定。'
+      '「寫入其他 App」只在 submit / process.proceed 時機觸發；*.show 時機只跑「寫入本記錄」/ 唯讀鎖定。' +
+      '「跳出提醒視窗」會擋住排在它下面的規則，直到使用者按下確定——所以要被它擋住的規則請排在它後面；' +
+      '「寫入其他 App」一律最後執行，因此必定被提醒視窗擋住。'
     ]));
 
     state.rules.forEach((r, idx) => sec.appendChild(renderRuleCard(r, idx)));
@@ -724,7 +888,51 @@
 
     addRow('動作', select(ACTIONS, r.action, (v) => { r.action = v; render(); }));
 
-    if (r.action === 'writeSelf') {
+    if (r.action === 'dialog') {
+      if (!r.dialog || typeof r.dialog !== 'object') {
+        r.dialog = { icon: 'warn', title: '提醒', text: '', confirmLabel: 'OK', cancelLabel: '', cancelMessage: '', accent: '' };
+      }
+      const d = r.dialog;
+      const canBlock = ruleCanBlock(r);
+
+      addRow('圖示', select(DIALOG_ICONS, d.icon || 'warn', (v) => { d.icon = v; }));
+      addRow('標題', textInput(d.title, (v) => { d.title = v; }, '例：提醒（留空＝不顯示標題）'));
+      addRow('內文', bigTextarea(d.text, (v) => { d.text = v; },
+        '直接打多行文字，換行與縮排會原樣顯示。\n文中的 {欄位代碼} 會代換成該記錄的實際值，例如：\n※　首張憑證寫上請款單編號【{請款單編號}】', 9));
+      addRow('', el('div', { style: { color: '#6b7480', fontSize: '12px' } },
+        ['內文為純文字，不會解析 HTML；要調字級／顏色／寬度請到下方「4. 提醒視窗外觀」。']));
+
+      addRow('確定鍵文字', textInput(d.confirmLabel, (v) => { d.confirmLabel = v; }, 'OK'));
+      addRow('取消鍵文字', textInput(d.cancelLabel, (v) => { d.cancelLabel = v.trim(); render(); },
+        '留空＝只有確定鍵（純提醒，按了一定接續）'));
+
+      if (String(d.cancelLabel || '').trim()) {
+        addRow('取消時的訊息', textInput(d.cancelMessage, (v) => { d.cancelMessage = v; },
+          '已取消操作。（按取消後顯示在 kintone 的錯誤提示列）'));
+        if (!canBlock) {
+          addRow('', el('div', { class: 'sda-error' },
+            ['⚠ 目前勾選的觸發時機攔不住動作（*.show 畫面已載入完、*.submit.success 記錄已存檔），取消鍵會被自動隱藏、只顯示確定鍵。要能中止請改勾「儲存前 (*.submit)」或「流程推進時」。']));
+        }
+      }
+
+      const accentWrap = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } });
+      accentWrap.appendChild(colorPicker(d.accent, state.dialogStyle.accent, (v) => { d.accent = v; render(); }));
+      accentWrap.appendChild(el('span', { style: { fontSize: '12px', color: '#6b7480' } },
+        [String(d.accent || '').trim() ? `此規則覆寫為 ${d.accent}` : '（未覆寫，使用全域預設強調色）']));
+      if (String(d.accent || '').trim()) {
+        accentWrap.appendChild(el('button', {
+          class: 'sda-btn', style: { fontSize: '11px', padding: '3px 9px' },
+          onclick: () => { d.accent = ''; render(); },
+        }, ['還原全域']));
+      }
+      addRow('強調色（圖示）', accentWrap);
+
+      addRow('', el('button', {
+        class: 'sda-btn sda-btn-copy', style: { alignSelf: 'flex-start' },
+        onclick: () => previewDialogRule(r),
+      }, ['👁 預覽此提醒視窗']));
+
+    } else if (r.action === 'writeSelf') {
       addRow('目標欄位', fieldCombo(FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
       addRow('值的來源', searchableSelect(VALUE_SOURCES, r.valueSource, (v) => { r.valueSource = v; render(); }));
 
@@ -746,6 +954,10 @@
       }
       addRow('', checkbox(r.skipIfFilled, (v) => { r.skipIfFilled = v; }, '僅在目標欄位空白時才寫入'));
       addRow('', checkbox(r.appendMode, (v) => { r.appendMode = v; }, '追加模式（CHECK_BOX / 多選：保留原有勾選再加上新值）'));
+      if (r.valueSource === 'copyAttachment' && !isSubmitSuccessOnlyTrigger(r)) {
+        addRow('', el('div', { class: 'sda-error' },
+          ['⚠ 附件檔案複製僅在「存檔後 (*.submit.success)」生效，請把上方「觸發時機」改成「新增存檔後」或「編輯存檔後」，否則儲存時會被擋下。']));
+      }
     } else {
 
       addRow('寫入模式', select(WRITE_MODES, r.writeMode, (v) => { r.writeMode = v; render(); }));
@@ -767,6 +979,10 @@
         addRow('Key 對應', renderMappingEditor(r, 'keyMapping', tOpts, '+ 新增 Key 對應'));
       }
       addRow('欄位對應', renderMappingEditor(r, 'fieldMapping', tOpts, '+ 新增欄位對應'));
+      if (ruleUsesCopyAttachment(r) && !isSubmitSuccessOnlyTrigger(r)) {
+        addRow('', el('div', { class: 'sda-error' },
+          ['⚠ 欄位對應中使用了「附件檔案複製」，僅在「存檔後 (*.submit.success)」生效，請把上方「觸發時機」改成「新增存檔後」或「編輯存檔後」，否則儲存時會被擋下。']));
+      }
       addRow('失敗處理', select(ON_ERROR, r.onError, (v) => { r.onError = v; }));
     }
 
@@ -833,8 +1049,11 @@
         const rules = Array.isArray(parsed.rules) ? parsed.rules
           : (Array.isArray(parsed) ? parsed : null);
         if (!rules) { alert('找不到 rules，請確認這是本外掛匯出的設定。'); return false; }
-        if (!confirm(`將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）\n確定要套用嗎？`)) return false;
+        const incomingStyle = (parsed && parsed.dialogStyle && typeof parsed.dialogStyle === 'object') ? parsed.dialogStyle : null;
+        const styleNote = incomingStyle ? '\n（提醒視窗外觀也會一併套用）' : '';
+        if (!confirm(`將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）${styleNote}\n確定要套用嗎？`)) return false;
         state.rules = rules;
+        if (incomingStyle) state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, incomingStyle);
         render();
         const msg = document.getElementById('sda-msg');
         if (msg) { msg.className = ''; msg.textContent = `已匯入 ${rules.length} 條規則，確認後請按「儲存」。`; }
@@ -873,12 +1092,18 @@
       if (r.action === 'writeSelf' && r.valueSource !== 'readonly' && !r.targetField) {
         errors.push(`${id}: 缺少目標欄位`);
       }
+      if (r.action === 'dialog' && !String((r.dialog && r.dialog.text) || '').trim()) {
+        errors.push(`${id}: 提醒視窗缺少內文`);
+      }
       if (r.action === 'writeOther' && !r.targetApp) errors.push(`${id}: 缺少目標 App ID`);
       if (r.action === 'writeOther' && r.writeMode !== 'create' && (!Array.isArray(r.keyMapping) || !r.keyMapping.length)) {
         errors.push(`${id}: update/upsert 必須提供 Key 對應`);
       }
       if (r.action === 'writeOther' && (!Array.isArray(r.fieldMapping) || !r.fieldMapping.length)) {
         errors.push(`${id}: 缺少欄位對應`);
+      }
+      if (ruleUsesCopyAttachment(r) && !isSubmitSuccessOnlyTrigger(r)) {
+        errors.push(`${id}: 附件檔案複製 (copyAttachment) 僅能在「存檔後」觸發時機使用，請只勾選「新增存檔後」或「編輯存檔後」`);
       }
     });
     return errors;

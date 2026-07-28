@@ -195,6 +195,7 @@
 |---|---|
 | **寫入本記錄欄位** | 把值填進這筆記錄的某個欄位 ← 最常用 |
 | **寫入其他 App 記錄** | 把值寫進另一個 App 的記錄 |
+| **跳出提醒視窗** | 不寫任何欄位，跳一個提醒視窗；按下確定後才繼續執行後面的規則（見 ⑩，v1.15.0） |
 
 ---
 
@@ -261,6 +262,57 @@
 | 失敗處理 | 寫入失敗時要擋下儲存 / 只記錄錯誤 / 忽略 |
 
 > JSON 格式的詳細說明請參考「寫入其他App教學.md」（或請工程師協助設定）
+
+---
+
+### ⑩ 跳出提醒視窗（v1.15.0）
+
+動作選「**跳出提醒視窗**」時，這條規則不寫任何欄位，而是在事件觸發時跳一個視窗；**使用者按下「確定」後，才會繼續執行排在它下面的規則**。
+
+> 📘 完整的操作步驟、實務範例與疑難排解，請參考 **[提醒視窗操作教學.md](提醒視窗操作教學.md)**。以下為設定欄位的速查說明。
+
+| 欄位 | 說明 |
+|---|---|
+| 圖示 | 驚嘆號 / 資訊 / 完成 / 錯誤 / 詢問 / 不顯示 |
+| 標題 | 視窗標題，留空＝不顯示標題列 |
+| 內文 | 多行文字，**換行與縮排會原樣顯示**。文中的 `{欄位代碼}` 會代換成這筆記錄的實際值 |
+| 確定鍵文字 | 預設 `OK` |
+| 取消鍵文字 | **留空＝只有確定鍵**（純提醒，按了一定接續）。填了才出現取消鍵 |
+| 取消時的訊息 | 按取消後顯示在 kintone 錯誤提示列的文字 |
+| 強調色（圖示） | 只影響這條規則的圖示顏色；不設就用全域預設色 |
+
+按「👁 預覽此提醒視窗」可以立刻看到實際長相（預覽用的是跟正式完全同一支渲染程式，不是另做的示意圖）。
+
+#### 內文範例
+
+```
+※　請將同一筆請款單之傳統紙本發票及收據正本
+　　① 釘起(或夾成)一份
+　　② 首張憑證寫上請款單編號【{請款單編號}】
+　　③ 盡速寄交會計課承辦
+
+※　有收據及傳統紙本發票的請款單，
+　　會計課於收到正本後方能執行請款作業
+```
+
+#### ⚠️ 四件一定要知道的事
+
+1. **只有「儲存前 (`*.submit`)」和「流程推進時」按取消才擋得住。**
+   「畫面載入時 (`*.show`)」畫面已經跑完了、「存檔後 (`*.submit.success`)」記錄已經存進去了，這兩類時機 kintone 不會等提醒視窗，所以取消鍵會被自動隱藏，只剩確定鍵。設定畫面會提示。
+
+2. **提醒視窗只擋得住「排在它下面」的規則。** 要被它擋住的規則請排到它後面。另外「寫入其他 App」一律最後執行，所以一定會被提醒視窗擋住。
+
+3. **`{欄位代碼}` 在「新增儲存前」抓不到記錄編號**——記錄還沒存進去，`{記錄編號}` 會是空的。要顯示新單號請改用「新增存檔後」，但那時就不能擋了。
+
+4. **同一個事件命中多條提醒規則會依序跳**，一個按完才跳下一個。
+
+#### 外觀（設定畫面第 4 區「提醒視窗外觀」）
+
+寬度、字級、行高、標題字級、圓角、遮罩深淺、內文對齊、預設強調色、確定鍵顏色**由全域統一設定**，所有提醒視窗共用，改一次全部生效。要更細的控制可用「進階：自訂 CSS」，可用的選擇器：
+
+`.sda-dlg-overlay`（遮罩）、`.sda-dlg`（視窗本體）、`.sda-dlg-icon`（圖示圈）、`.sda-dlg-title`（標題）、`.sda-dlg-text`（內文）、`.sda-dlg-btn` / `.sda-dlg-ok` / `.sda-dlg-cancel`（按鈕）
+
+> 這組外觀設定**會**隨「匯出 / 匯入設定」一起帶到其他 App（與 Token / Log App ID 不同）。
 
 ---
 
@@ -541,6 +593,7 @@
 | 分類 | 意思 | 常見錯誤碼 | 該怎麼辦 |
 |---|---|---|---|
 | `success` | 成功 | — | 無 |
+| `cancelled` | 使用者在提醒視窗按了取消（`LOG_RESULT` 記為「取消」） | — | 正常操作，不是錯誤；統計時請與失敗分開看 |
 | `session` | 登入逾時 | `CB_AU01` | 請使用者重新登入；畫面已顯示友善訊息 |
 | `permission` | 無權限 | `GAIA_NO01`、`CB_NO01`、`GAIA_DA02` | 檢查使用者權限或改用 API Token |
 | `config` | 外掛設定錯誤 | `GAIA_FE01`（欄位不存在）、`GAIA_AP01`（App 不存在）、`CB_IL02`（Token 無效） | **回外掛設定修正規則** |
@@ -590,6 +643,7 @@
 - `contents/dist/desktop.js`、`contents/dist/mobile.js`：**內容完全相同**（同一份 runtime）。維護時只改 `desktop.js`，再覆蓋到 `mobile.js`。
 - 單一檔案同時註冊電腦版與手機版事件名稱（`app.record.*` 與 `mobile.app.record.*`）；kintone 會自動忽略與當前平台不符的事件名稱。
 - `contents/dist/config.js`：設定畫面（純 JS 動態渲染到 `#ui-section`）。
+- `contents/dist/dialog.js`（v1.15.0）：**三邊共用**的提醒視窗元件，`manifest.json` 的 `desktop.js` / `mobile.js` / `config.js` 三個陣列都載入它，且都排在各自主檔之前。它只掛 `window.SdaDialog = { show, buildCss, DEFAULT_STYLE }`，不註冊任何事件。**共用是刻意的**：設定畫面的「預覽」呼叫的就是 runtime 那支 `show()`，預覽與實際不可能不一致。這支檔案不需要像 desktop/mobile 那樣複製。
 - 設定值透過 `kintone.plugin.app.getConfig/setConfig` 以單一 JSON 字串（`data`）存取。
 
 ### B-2. 註冊的事件（被動觸發，無背景常駐）
@@ -735,7 +789,7 @@
 
 - 設定頁工具列加 `exportConfig` / `importConfig` 兩鈕（皆呼叫 `openTextModal` 自製覆蓋層 modal，內含 readonly/可編輯 `textarea`，不依賴 `prompt`）。
 - **匯出**：`JSON.stringify(state, null, 2)` → `navigator.clipboard.writeText`（失敗則退回手動全選複製），同時開 readonly modal 顯示。內容**含 API Token**（與 B-12「不可 `console.log` config」同等敏感，匯出檔請當機密處理）。
-- **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules），`confirm` 後 `state.rules = rules` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。匯入後僅改記憶體 `state`，按「儲存」才 `setConfig` 落地。
+- **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules）與 `parsed.dialogStyle`（v1.15.0，有才套用），`confirm` 後寫回 `state` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。`dialogStyle` 之所以帶、Token 之所以不帶，判準是「是不是本 App 專屬的機密或識別碼」——外觀兩者皆非，且不跟著走的話匯入的提醒規則會長得跟來源 App 不一樣。匯入後僅改記憶體 `state`，按「儲存」才 `setConfig` 落地。
 
 ### B-12c. 存檔後觸發 `*.submit.success`（v1.13.0）
 
@@ -792,6 +846,43 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 ```
 
 使用相同 `.ppk` 可維持**相同 plugin ID**，於 kintone 後台「更新」即可覆蓋升級、設定自動保留。
+
+### B-14. 提醒視窗（`action: 'dialog'`，v1.15.0）
+
+第三種 `action`，與 `writeSelf` / `writeOther` 並列。它不寫任何欄位，只是在規則命中時跳一個 modal 並 `await` 使用者的回應，因此**完整沿用既有的比對引擎**（`triggerMatches`、`statusMatches`、`conditions` + AND/OR），runtime 沒有為它另開比對路徑。
+
+**規則結構**
+
+```jsonc
+{
+  "action": "dialog",
+  "dialog": {
+    "icon": "warn",              // warn|info|success|error|question|none
+    "title": "提醒",
+    "text": "…{欄位代碼}…",       // 純文字，textContent 寫入
+    "confirmLabel": "OK",
+    "cancelLabel": "",           // 空 = 純提醒，不顯示取消鍵
+    "cancelMessage": "已取消操作。",
+    "accent": ""                 // 空 = 用全域 dialogStyle.accent
+  }
+}
+```
+
+全域外觀存在 `state.dialogStyle`（`width`／`fontSize`／`lineHeight`／`titleSize`／`radius`／`overlay`／`accent`／`buttonColor`／`align`／`customCss`），非機密，隨匯出匯入走（見 B-12a）。
+
+**runtime 接點（`desktop.js`）**
+
+- `applyRules` 的 selfRules 迴圈開頭分流 `rule.action === 'dialog'` → `await runDialog(rule, ctx)`。回傳 `false` 時寫 `_runInfo.cancelled`、設 `event.error = dialog.cancelMessage` 並 `return event`，因此**中止點就是它在規則清單裡的位置**；排在它之前的規則已經跑完、之後的不會跑。`writeOther` 一律在所有 selfRules 之後執行，故必定被擋。
+- `interpolateFields` 以 `/\{([^}]+)\}/` 代換記錄欄位值（沿用 `formula`／`keyExpr` 的 `{}` 慣例）；多值欄位取 `name || code` 以 `、` 串接；欄位不存在代成空字串並 `console.warn`。
+- **可中止判別**：`ctx.trigger === 'process.proceed' || /\.submit$/.test(ctx.trigger)`。只有這些時機 kintone 會等 handler 回傳的 Promise。不符時 `cancelLabel` 強制清空，視窗只出現確定鍵——`*.show` 畫面已渲染完、`*.submit.success` 記錄已存檔，讓使用者以為能取消是騙人的。
+- `runProceedRulesViaApi` 傳 `noBlock: true`：狀態已由 REST API 推進完畢，取消無法回滾。
+- `runSuccessRules` 走 `*.submit.success`，可中止判別本來就是 false，不需另外傳旗標。
+- **Log**：`loggedApply` 在既有失敗分支**之前**先判 `_runInfo.cancelled`，寫 `result: '取消'` / `category: 'cancelled'`。使用者主動取消是正常操作，混進 `system`／`config` 會讓錯誤統計失真。
+
+**`dialog.js` 的兩個安全 / 體感決定**
+
+- 內文以 `textContent` + `white-space: pre-wrap` 寫入，**不碰 `innerHTML`**：換行縮排原樣保留，且設定內容永遠不會被當成標記解析。
+- 沒有取消鍵時 `Esc` 視同「確定」，有取消鍵時 `Esc` 視同「取消」。否則使用者關掉純提醒視窗會意外中斷流程，且完全沒有回饋。
 
 ---
 
