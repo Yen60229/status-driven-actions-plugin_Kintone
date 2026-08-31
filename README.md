@@ -85,6 +85,15 @@
 
 - 在外掛設定頁最上方的「**本 App Token**」欄位貼上剛才複製的 Token
 
+### 簽核人沒有編輯權限時會發生什麼事
+
+外掛會自動判斷、不需要額外設定：
+
+- **推進者有編輯權限**（例如經辦人自己送出）→ 欄位值隨狀態轉換一起原子儲存，不動用 Token。
+- **推進者沒有編輯權限**（例如簽核人只是「作業者」，但沒有記錄編輯權）→ 自動改用「本 App Token」在推進完成後補寫，並重新整理畫面顯示結果。
+
+> kintone 的「**作業者**」與「**記錄編輯權限**」是兩套獨立設定。簽核人可以是作業者（因此按得動推進鈕），同時完全沒有記錄編輯權限——這正是「除了經辦人，其他簽核人都不給編輯權」這種設計會遇到的情況，外掛判斷得出來並會自動用 Token 補寫。**你只要把「本 App Token」填好就行。**
+
 ---
 
 ### 設定「寫入其他 App」的 Token（選填）
@@ -308,9 +317,20 @@
 
 #### 外觀（設定畫面第 4 區「提醒視窗外觀」）
 
-寬度、字級、行高、標題字級、圓角、遮罩深淺、內文對齊、預設強調色、確定鍵顏色**由全域統一設定**，所有提醒視窗共用，改一次全部生效。要更細的控制可用「進階：自訂 CSS」，可用的選擇器：
+最大寬度、字級、行高、標題字級、圓角、遮罩深淺、內文對齊、預設強調色、確定鍵顏色**由全域統一設定**，所有提醒視窗共用，改一次全部生效。
 
-`.sda-dlg-overlay`（遮罩）、`.sda-dlg`（視窗本體）、`.sda-dlg-icon`（圖示圈）、`.sda-dlg-title`（標題）、`.sda-dlg-text`（內文）、`.sda-dlg-btn` / `.sda-dlg-ok` / `.sda-dlg-cancel`（按鈕）
+> **視窗寬度全自動，內文不會自動換行**（v1.16.0）：只有你在輸入框裡打的換行字元才斷行，視窗寬度長到最長那一行為止。排版怎麼打就怎麼顯示，不會被系統折在奇怪的位置。因此**沒有「寬度」這個設定項目**——寬度完全由內容決定。
+>
+> **螢幕寬度小於 600px（手機）時會自動恢復換行**，並把視窗收在 92vw 以內。不然 14px 的 40 個全形字約 560px，超過手機螢幕，使用者得左右滑才讀得完提醒。
+
+> **關於 SweetAlert2（v1.16.0）**：若記錄頁上有載入 SweetAlert2（`window.Swal`），提醒視窗會直接用它渲染；沒有才用外掛內建的視窗元件。上述設定項目**兩種情況都適用**，差別主要在圖示畫法與開場動畫。設定畫面的「4. 提醒視窗外觀」會顯示本頁是否偵測到 SweetAlert2。
+
+要更細的控制可用「進階：自訂 CSS」。選擇器依渲染器而異，建議兩套都寫，沒命中的那套不會有作用：
+
+| 渲染器 | 選擇器 |
+|---|---|
+| SweetAlert2 | `.swal2-popup.sda-swal`（本體）、`.sda-swal` 底下的 `.swal2-title`、`.swal2-html-container`、`.swal2-icon`、`.swal2-confirm` |
+| 內建元件 | `.sda-dlg`（本體）、`.sda-dlg-overlay`、`.sda-dlg-icon`、`.sda-dlg-title`、`.sda-dlg-text`、`.sda-dlg-ok`、`.sda-dlg-cancel` |
 
 > 這組外觀設定**會**隨「匯出 / 匯入設定」一起帶到其他 App（與 Token / Log App ID 不同）。
 
@@ -658,11 +678,15 @@
 ### B-3. `process.proceed` 寫入流程（核心）
 
 1. 先把規則套用到 `event.record`（記憶體內）。
-2. `checkEditPermission()` 呼叫 `/k/v1/records/acl/evaluate.json` 判斷使用者在**新狀態**下是否仍可編輯：
+2. `checkEditPermission()` 呼叫 `/k/v1/records/acl/evaluate.json` 判斷**當前使用者現在是否可編輯這筆記錄**：
    - **可編輯** → `return event`（與狀態轉換一起原子儲存）。
-   - **不可編輯 + 有設定本 App Token（selfAppToken）** → 存 `pendingWrite`、`return undefined`；待下一個 `detail.show` 觸發時，用 Token 走 REST `PUT` 補償寫入（compensation write）。
+   - **不可編輯 + 有設定本 App Token（selfAppToken）** → 存 `pendingWrite`、`return undefined`；待下一個 `detail.show` 觸發時，用 Token 走 REST `PUT` 補償寫入（compensation write），成功後 `location.reload()`。
    - **不可編輯 + 無 Token** → 仍 `return event`（狀態會轉換，但受欄位權限限制的欄位寫入可能被 kintone 拒絕）。
-3. 補償寫入若失敗，以非阻擋方式提示（`Swal` 或 console），記錄狀態仍正確、只是履歷可能漏一列。
+3. 補償寫入若失敗，以非阻擋方式提示（`SdaDialog`，見 B-14），記錄狀態仍正確、只是履歷可能漏一列。
+
+> **為什麼查「現在」的權限是對的**：這支查詢問的是「隨狀態轉換一起送出的欄位寫入會不會成功」，而那取決於使用者對**當前**記錄的編輯權，不是推進後的新狀態。kintone 的「作業者」與「記錄編輯權限」是兩套獨立設定，簽核人可以是作業者（按得動推進鈕）卻沒有編輯權——此時這支查詢正確回傳 `editable: false`，補償寫入才會啟動。
+>
+> 這套判斷與 cybozu 原廠的「流程管理履歷外掛」（Process Management History Plug-in v2.1.0）完全一致：同樣的 `evaluatePermission` 呼叫、同樣的時機、同樣延後到 `detail.show` 以 `kintone.plugin.app.proxy` 寫入、同樣成功後 `location.reload()`。
 
 ### B-4. Token 機制
 
@@ -879,10 +903,41 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 - `runSuccessRules` 走 `*.submit.success`，可中止判別本來就是 false，不需另外傳旗標。
 - **Log**：`loggedApply` 在既有失敗分支**之前**先判 `_runInfo.cancelled`，寫 `result: '取消'` / `category: 'cancelled'`。使用者主動取消是正常操作，混進 `system`／`config` 會讓錯誤統計失真。
 
-**`dialog.js` 的兩個安全 / 體感決定**
+**兩種渲染器（v1.16.0）**
 
-- 內文以 `textContent` + `white-space: pre-wrap` 寫入，**不碰 `innerHTML`**：換行縮排原樣保留，且設定內容永遠不會被當成標記解析。
-- 沒有取消鍵時 `Esc` 視同「確定」，有取消鍵時 `Esc` 視同「取消」。否則使用者關掉純提醒視窗會意外中斷流程，且完全沒有回饋。
+`SdaDialog.show()` 在**呼叫當下**偵測 `window.Swal`：有就用 SweetAlert2，沒有才用內建的原生元件。兩條路的回傳值語意完全相同（`true`＝確定／`false`＝取消），呼叫端不需要知道用了哪一個。
+
+- **偵測時機必須在 `show()` 內，不可在載入時做。** 外掛 JS 可能早於 App 自訂 JS 執行，載入當下 `window.Swal` 還不存在，但事件觸發時它已經在了。
+- **樣式一律以 `.sda-swal` / `.sda-swal-container` 收斂**（`customClass` 指定），避免外掛的寬度、字級設定去污染 App 自己呼叫的 SweetAlert2。
+- `.swal2-container.sda-swal-container` 的 `z-index` 拉到 `100000`：SweetAlert2 預設 1060，會被設定畫面自製的 `openTextModal`（9999）蓋住。
+- **`accent` 停在預設值 `#f5a623` 時，不覆寫 SweetAlert2 的圖示配色**，讓它保持原生的淺橘圈線＋深橘驚嘆號。管理者改成別的顏色才會覆寫——沒表達意見就不要把它壓平。
+- **`success` / `error` 圖示一律用語意色**（`#a5dc86` / `#f27474`），`accent` 不介入。SweetAlert2 這兩個圖示由多個子元素組成（勾線、叉線各有底色），只改 `border-color` 與 `color` 會得到半染色的結果；兩種渲染器在這點行為一致。
+- 呼叫 `Swal.fire` 若同步拋錯，`catch` 後退回內建元件，不會讓整條規則失敗。
+
+**設定畫面的誠實揭露**：外掛設定畫面是 kintone 管理端頁面，不一定載得到全域的 SweetAlert2。「4. 提醒視窗外觀」會以 `SdaDialog.hasSwal()` 偵測並顯示綠色（偵測到）或橘色（未偵測到，預覽改用內建元件、與實際可能有出入）提示。
+
+**自適應寬度與圖示動畫（v1.16.0）**
+
+- 內文用 `white-space: pre`（不是 `pre-wrap`）且不設 `word-break`：**完全不自動換行**，只在設定內容裡的換行字元處斷行。管理者在輸入框排的版面就是使用者看到的版面。
+- **寬度沒有上限、也沒有對應的設定項目**：`.sda-dlg` 用 `width:auto; min-width:280px`，SweetAlert2 傳 `width:'auto'` 並以 `.sda-swal{max-width:none}` 解掉 SweetAlert2 自帶的 `max-width:100%`（不解就長不出容器寬度）。`dialogStyle.width` 已從樣式模型移除，舊設定殘留的該鍵會被忽略。
+- **遮罩改成 `overflow:auto` + 視窗 `margin:auto` 置中**，並拿掉 flex 的 `align-items/justify-content: center`。原因：flex 的置中對齊在內容超出容器時會把**起始邊裁掉且捲不回去**，左側文字會永久看不到。`margin:auto` 沒有這個問題，超寬時遮罩整片可捲。
+- **`@media (max-width:600px)` 恢復 `pre-wrap` 並補回 `max-width:92vw`**：14px 的 40 個全形字約 560px，超過手機螢幕寬度。堅持不換行等於逼手機使用者左右滑才讀得完提醒，這條斷點是刻意的取捨——電腦版照管理者排的版，手機版保可讀性。該區段排在 `customCss` 之前，管理者仍可覆寫。
+- 內建元件的圖示改用 SVG：圓環與勾／叉都以 `stroke-dasharray` + `stroke-dashoffset` 動畫畫出來（`.sda-dlg-ring` / `.sda-dlg-mark`），`warn`／`info`／`question` 保留文字字元（`.sda-dlg-glyph`）只讓圓環動。目的是讓「沒有 SweetAlert2 時的退路」不會明顯比較廉價——`success` 少了打勾動畫是最容易被一眼看出來的差異。
+- `success`／`error` 的圓環用 `opacity:.32`（比照 SweetAlert2 的淡色環），其餘用 `.78`。
+- 全部動畫都在 `@media (prefers-reduced-motion: reduce)` 下關閉。
+
+**兩個安全 / 體感決定**
+
+- 內文一律走純文字路徑（內建元件用 `textContent`、SweetAlert2 用 `text:` 而非 `html:`）搭配 `white-space: pre-wrap`：換行縮排原樣保留，且設定內容永遠不會被當成標記解析。
+- 沒有取消鍵時 `Esc`／點擊外部視同「確定」，有取消鍵時視同「取消」；有取消鍵時另設 `allowOutsideClick: false`，避免誤觸外部就中止了儲存。
+
+**設定畫面不再使用原生 `alert` / `confirm`（v1.16.0）**
+
+`config.js` 的所有提示與確認改走 `notify()` / `askConfirm()`，兩者都是 `SdaDialog.show()` 的薄包裝（僅在 `SdaDialog` 本身未載入時才退回原生，確保訊息不會消失）。連帶調整：
+
+- `openTextModal` 的確定鈕改為 `async`（`await onConfirm(...)`），因為「匯入設定」需要在 modal 內再跳一層確認並依結果決定要不要關閉 modal。
+- 儲存成功的提示改為 `.then()` 後才 `location.href` 跳轉——原本 `alert` 是同步阻塞，換成非同步視窗後若不等它關閉，導頁會把訊息一起帶走。
+- `compensationWrite` 的失敗警告從直接呼叫 `window.Swal` 改為 `SdaDialog.show()`。舊版在沒有 Swal 時只寫 `console.warn`，使用者完全看不到補償寫入失敗、履歷漏記卻無人察覺。
 
 ---
 

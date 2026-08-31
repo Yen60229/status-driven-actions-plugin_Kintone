@@ -47,7 +47,9 @@ status-driven-actions-plugin/
    `diff contents/dist/desktop.js contents/dist/mobile.js` 應無輸出。
    （單一檔案同時註冊 `app.record.*` 與 `mobile.app.record.*` 事件，kintone 自動忽略不符當前平台的事件名稱。）
 
-   ⚠ **`dialog.js` 不在此規則內**——它是 desktop / mobile / config 三邊共用的同一個檔案（`manifest.json` 三個 js 陣列都列它），改一次三邊都生效，**不要複製它**。設定畫面的「預覽」呼叫的就是 runtime 的 `SdaDialog.show()`，這是刻意的：預覽與實際不可能不一致。
+   ⚠ **`dialog.js` 不在此規則內**——它是 desktop / mobile / config 三邊共用的同一個檔案（`manifest.json` 三個 js 陣列都列它），改一次三邊都生效，**不要複製它**。設定畫面的「預覽」呼叫的就是 runtime 的 `SdaDialog.show()`。
+
+5. **不要在外掛裡用原生 `alert` / `confirm`。** 一律走 `SdaDialog.show()`（runtime）或 `notify()` / `askConfirm()`（`config.js`），它們會在有 `window.Swal` 時用 SweetAlert2、沒有時用內建元件。唯一保留原生的地方是這些包裝函式自己的最後退路（`SdaDialog` 未載入時），確保訊息不會整個消失。
 
 2. **絕不可 `console.log` 原始 config。** `rawConfig.data` 內含 API Token，會洩漏給所有開 DevTools 的使用者。見 [README.md 附錄 B-12](README.md)。
 
@@ -85,7 +87,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 |---|---|---|
 | 設定載入 | `PLUGIN_ID`、`TOKENS`、`SELF_TOKEN`、`LOG_APP`、`LOG_TOKEN` 由 `kintone.plugin.app.getConfig` 解析單一 JSON | B-4 |
 | 事件命名空間 | `APP_NS` / `MOBILE_NS`、`E([...])` 同時組電腦版與手機版事件名 | B-1 |
-| 核心套用 | `applyRules` / `process.proceed` 補償寫入（`pendingWrite` + `checkEditPermission`） | B-3 |
+| 核心套用 | `applyRules` / `process.proceed` 補償寫入（`pendingWrite` + `checkEditPermission`；與原廠流程管理履歷外掛同架構） | B-3 |
 | 值來源 | `valueSource` 一覽：`fixed`/`loginUser`/`today`/`fieldCopy`/`formula`/`lookup`/`dateShift`/`subtableLastRow`/`appendSubtable`/`readonly`… | B-5、B-6 |
 | 日期加減 | `dateShift`（`parseBaseDate`/`addPeriod`/`formatDateOut`/`computeDateShift`；可讀 `ctx.targetRecord`，v1.6.0） | B-6 |
 | 子表格履歷 | `appendSubtable` + `historyMode` | B-7 |
@@ -95,7 +97,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
 | 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
 | 觸發複選 | `triggerMatches`／`statusMatches` 依實際觸發事件分流；`rule.trigger` 可逗號分隔複選（v1.9.0） | B-10b |
-| 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`） | B-14 |
+| 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`）：**呼叫當下**偵測 `window.Swal`，有就用 SweetAlert2、沒有才用內建元件，樣式以 `.sda-swal` 收斂（v1.16.0） | B-14 |
 | 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算）；`buildOtherPayload` 回傳 `{payload,suspects}`，`fieldCopy` 來源欄位不存在／`dateShift` 空值時標記可疑；`badFieldsFromError` 解析 kintone `errors` 指名欄位 | B-11 |
 | 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；觸發時機用 `triggerCheckboxGroup` 複選（v1.9.0）；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
@@ -127,8 +129,8 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
   ],
   "logAppId": "",                 // 執行 Log App ID（匯入不覆蓋）
   "logToken": "",                 // Log App Token（匯入不覆蓋）
-  "dialogStyle": {                // 提醒視窗全域外觀（v1.15.0；非機密，匯入【會】覆蓋）
-    "width": 420, "fontSize": 14, "lineHeight": 1.9, "titleSize": 20,
+  "dialogStyle": {                // 提醒視窗全域外觀（v1.15.0；非機密，匯入【會】覆蓋；width 已於 v1.16.0 移除，寬度全自動）
+    "fontSize": 14, "lineHeight": 1.9, "titleSize": 20,
     "radius": 12, "overlay": 0.45, "accent": "#f5a623",
     "buttonColor": "#7b68ee", "align": "left", "customCss": ""
   },

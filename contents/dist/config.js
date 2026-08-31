@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.15.0';
+  const UI_VERSION = '1.16.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -16,7 +16,7 @@
   if (state.logToken === undefined) state.logToken = '';
 
   const DEFAULT_DIALOG_STYLE = (window.SdaDialog && window.SdaDialog.DEFAULT_STYLE) || {
-    width: 420, fontSize: 14, lineHeight: 1.9, titleSize: 20, radius: 12,
+    fontSize: 14, lineHeight: 1.9, titleSize: 20, radius: 12,
     overlay: 0.45, accent: '#f5a623', buttonColor: '#7b68ee', align: 'left', customCss: '',
   };
   state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, state.dialogStyle || {});
@@ -465,10 +465,24 @@
     root.appendChild(renderDialogStyleSection());
   };
 
+  // 設定畫面所有的提示 / 確認一律走 SdaDialog（頁面上有 SweetAlert2 就用它），
+  // 不再用瀏覽器原生 alert / confirm。SdaDialog 本身沒載入時才退回原生，確保訊息不會消失。
+  const notify = (opts) => {
+    if (!window.SdaDialog) { alert(opts.text); return Promise.resolve(true); }
+    return window.SdaDialog.show(Object.assign(
+      { icon: 'info', confirmLabel: '確定', style: state.dialogStyle }, opts));
+  };
+
+  const askConfirm = (opts) => {
+    if (!window.SdaDialog) return Promise.resolve(confirm(opts.text));
+    return window.SdaDialog.show(Object.assign(
+      { icon: 'question', confirmLabel: '確定', cancelLabel: '取消', style: state.dialogStyle }, opts));
+  };
+
   // 預覽走的是 runtime 同一支 SdaDialog.show，所以預覽長什麼樣、使用者就看到什麼樣。
   // 差別只有 {欄位代碼} 這裡沒有實際記錄可代入，改顯示成〔欄位代碼〕讓管理者看得出位置。
   const previewDialogRule = (r) => {
-    if (!window.SdaDialog) { alert('提醒視窗元件未載入，請重新整理設定畫面。'); return; }
+    if (!window.SdaDialog) { notify({ icon: 'error', title: '無法預覽', text: '提醒視窗元件未載入，請重新整理設定畫面。' }); return; }
     const d = r.dialog || {};
     const demo = (s) => String(s == null ? '' : s).replace(/\{([^}]+)\}/g, (_, c) => `〔${c.trim()}〕`);
     window.SdaDialog.show({
@@ -496,6 +510,18 @@
     sec.appendChild(el('p', { class: 'sda-section-help' }, [
       '所有「跳出提醒視窗」規則共用這一組外觀；個別規則可另外覆寫圖示與強調色。' +
       '這組設定會隨「匯出／匯入設定」一起帶到其他 App。'
+    ]));
+
+    // 兩種渲染器的外觀不同，設定畫面偵測不到 SweetAlert2 時要講清楚預覽可能不等於實際。
+    const swalHere = !!(window.SdaDialog && window.SdaDialog.hasSwal && window.SdaDialog.hasSwal());
+    sec.appendChild(el('p', {
+      class: 'sda-section-help',
+      style: { color: swalHere ? '#1e7d4f' : '#b9770e' },
+    }, [swalHere
+      ? '✓ 本頁偵測到 SweetAlert2，提醒視窗與下方預覽都會用它渲染。'
+      : '⚠ 本頁偵測不到 SweetAlert2，預覽會改用外掛內建的視窗元件。若記錄頁本身有載入 SweetAlert2，'
+        + '使用者實際看到的會是 SweetAlert2 的樣式，與此處預覽略有出入（尺寸、顏色、對齊等設定兩者皆適用，'
+        + '差別主要在圖示畫法與動畫）。'
     ]));
 
     const grid = el('div', { class: 'sda-rule-grid' });
@@ -528,7 +554,10 @@
       addRow(label, wrap);
     };
 
-    numRow('視窗寬度 (px)', 'width', '10', '實際寬度取 min(此值, 92vw)，手機會自動縮');
+    addRow('視窗寬度', el('div', { style: { color: '#6b7480', fontSize: '13px' } }, [
+      '自動：內文不會自動換行，只在你打的換行字元處斷行，視窗寬度長到最長那一行為止。'
+      + '（螢幕寬度小於 600px 的手機會自動恢復換行，避免要左右滑才讀得完。）'
+    ]));
     numRow('內文字級 (px)', 'fontSize', '1');
     numRow('內文行高', 'lineHeight', '0.1', '1.9 ≈ 條列式提醒的舒適行距');
     numRow('標題字級 (px)', 'titleSize', '1');
@@ -539,17 +568,20 @@
     colorRow('確定鍵顏色', 'buttonColor');
 
     addRow('進階：自訂 CSS', bigTextarea(s.customCss, (v) => { s.customCss = v; },
-      '選填。會接在外掛產生的樣式後面，可覆寫任何細節。可用的選擇器：\n' +
-      '.sda-dlg-overlay（遮罩）\n.sda-dlg（視窗本體）\n.sda-dlg-icon（圖示圈）\n' +
-      '.sda-dlg-title（標題）\n.sda-dlg-text（內文）\n.sda-dlg-btn / .sda-dlg-ok / .sda-dlg-cancel（按鈕）\n\n' +
-      '例：.sda-dlg-title { letter-spacing: .1em; }', 7));
+      '選填。會接在外掛產生的樣式後面，可覆寫任何細節。\n' +
+      '選擇器依渲染器而異，建議兩套都寫，沒命中的那套不會有作用：\n\n' +
+      '【有 SweetAlert2 時】.swal2-popup.sda-swal（視窗本體）\n' +
+      '　.sda-swal .swal2-title／.swal2-html-container／.swal2-icon／.swal2-confirm\n\n' +
+      '【內建元件時】.sda-dlg（視窗本體）\n' +
+      '　.sda-dlg-overlay／.sda-dlg-icon／.sda-dlg-title／.sda-dlg-text／.sda-dlg-ok／.sda-dlg-cancel\n\n' +
+      '例：.sda-swal .swal2-title, .sda-dlg-title { letter-spacing: .1em; }', 9));
     sec.appendChild(grid);
 
     const btnRow = el('div', { style: { display: 'flex', gap: '8px', marginTop: '12px' } });
     btnRow.appendChild(el('button', {
       class: 'sda-btn sda-btn-copy',
       onclick: () => {
-        if (!window.SdaDialog) { alert('提醒視窗元件未載入，請重新整理設定畫面。'); return; }
+        if (!window.SdaDialog) { notify({ icon: 'error', title: '無法預覽', text: '提醒視窗元件未載入，請重新整理設定畫面。' }); return; }
         window.SdaDialog.show({
           icon: 'warn', title: '提醒', text: SAMPLE_DIALOG_TEXT,
           confirmLabel: 'OK', cancelLabel: '', style: s,
@@ -558,8 +590,13 @@
     }, ['👁 用範例文字預覽']));
     btnRow.appendChild(el('button', {
       class: 'sda-btn',
-      onclick: () => {
-        if (!confirm('要把提醒視窗外觀還原成預設值嗎？（自訂 CSS 也會被清空）')) return;
+      onclick: async () => {
+        const agreed = await askConfirm({
+          icon: 'warn', title: '還原預設外觀',
+          text: '寬度、字級、顏色等全部回到預設值，「進階：自訂 CSS」的內容也會被清空。\n確定要還原嗎？',
+          confirmLabel: '確定還原', cancelLabel: '取消',
+        });
+        if (!agreed) return;
         state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE);
         render();
       },
@@ -815,10 +852,14 @@
         title: '進階：直接編輯此對應的 JSON（陣列）',
         value: JSON.stringify(r[kind] || [], null, 2),
         confirmLabel: '套用',
-        onConfirm: (text) => {
+        onConfirm: async (text) => {
           let parsed;
-          try { parsed = JSON.parse(text); } catch { alert('JSON 格式錯誤'); return false; }
-          if (!Array.isArray(parsed)) { alert('必須是陣列 [ ... ]'); return false; }
+          try { parsed = JSON.parse(text); }
+          catch { await notify({ icon: 'error', title: '格式錯誤', text: 'JSON 格式錯誤，請檢查括號與引號是否成對。' }); return false; }
+          if (!Array.isArray(parsed)) {
+            await notify({ icon: 'error', title: '格式錯誤', text: '此欄位必須是陣列，請以 [ ... ] 包住。' });
+            return false;
+          }
           r[kind] = parsed; render();
         },
       }),
@@ -1011,9 +1052,10 @@
     const close = () => document.body.removeChild(overlay);
     btnRow.appendChild(el('button', { class: 'sda-btn', style: { marginRight: '8px' }, onclick: close }, ['關閉']));
     if (onConfirm) {
+      // onConfirm 可為 async：內部要跳 SdaDialog 詢問時得等結果，才決定要不要收掉這個 modal。
       btnRow.appendChild(el('button', {
         class: 'sda-btn sda-btn-primary',
-        onclick: () => { if (onConfirm(ta.value) !== false) close(); },
+        onclick: async () => { if ((await onConfirm(ta.value)) !== false) close(); },
       }, [confirmLabel || '確定']));
     }
     box.appendChild(btnRow);
@@ -1042,22 +1084,36 @@
     openTextModal({
       title: '貼上從其他 App 匯出的設定 JSON（只會套用「規則」，本 App 的 Token／Log 設定保留不變）',
       value: '', confirmLabel: '套用規則',
-      onConfirm: (text) => {
+      onConfirm: async (text) => {
         let parsed;
         try { parsed = JSON.parse(text); }
-        catch { alert('JSON 格式錯誤，請確認貼上的內容完整。'); return false; }
+        catch {
+          await notify({ icon: 'error', title: '格式錯誤', text: 'JSON 格式錯誤，請確認貼上的內容完整。' });
+          return false;
+        }
         const rules = Array.isArray(parsed.rules) ? parsed.rules
           : (Array.isArray(parsed) ? parsed : null);
-        if (!rules) { alert('找不到 rules，請確認這是本外掛匯出的設定。'); return false; }
+        if (!rules) {
+          await notify({ icon: 'error', title: '找不到規則', text: '這份 JSON 裡沒有 rules，請確認是本外掛匯出的設定。' });
+          return false;
+        }
         const incomingStyle = (parsed && parsed.dialogStyle && typeof parsed.dialogStyle === 'object') ? parsed.dialogStyle : null;
         const styleNote = incomingStyle ? '\n（提醒視窗外觀也會一併套用）' : '';
-        if (!confirm(`將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）${styleNote}\n確定要套用嗎？`)) return false;
+        const agreed = await askConfirm({
+          icon: 'warn', title: '確認匯入',
+          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）${styleNote}`,
+          confirmLabel: '確定取代', cancelLabel: '再想想',
+        });
+        if (!agreed) return false;
         state.rules = rules;
         if (incomingStyle) state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, incomingStyle);
         render();
         const msg = document.getElementById('sda-msg');
         if (msg) { msg.className = ''; msg.textContent = `已匯入 ${rules.length} 條規則，確認後請按「儲存」。`; }
-        alert('規則已匯入。\n\n請務必確認：\n1. 規則用到的欄位代碼在本 App 都存在\n2. Token／目標 App ID 是否需要重新設定\n\n確認無誤後按「儲存」才會生效。');
+        await notify({
+          icon: 'success', title: '規則已匯入',
+          text: '請務必確認：\n① 規則用到的欄位代碼在本 App 都存在\n② Token／目標 App ID 是否需要重新設定\n\n確認無誤後按「儲存」才會生效。',
+        });
       },
     });
   };
@@ -1164,8 +1220,11 @@
       [TOKEN_MAP_URL, 'POST', {}, { map: JSON.stringify(tokenMap) }],
     ], () => {
       kintone.plugin.app.setConfig({ data: JSON.stringify(publicState) }, () => {
-        alert('設定已儲存，API Token 已加密存放於 kintone 伺服器（一般使用者無法讀取）。重新整理 App 後生效。');
-        window.location.href = `../../flow?app=${APP_ID}`;
+        // 一定要等視窗關閉才跳轉，否則導頁會把訊息一起帶走、使用者根本看不到。
+        notify({
+          icon: 'success', title: '設定已儲存',
+          text: 'API Token 已加密存放於 kintone 伺服器（一般使用者無法讀取）。\n重新整理 App 後生效。',
+        }).then(() => { window.location.href = `../../flow?app=${APP_ID}`; });
       });
     });
   };

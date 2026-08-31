@@ -1080,11 +1080,13 @@
     } catch (e) {
       console.error('[sda] compensation write failed', e);
 
-      const msg = `[Status-Driven Actions] 補償寫入失敗，請聯繫管理員手動補記錄。\n${e.message}`;
-      if (window.Swal) {
-        window.Swal.fire({ icon: 'warning', title: '警告', text: msg });
+      // 一律走 SdaDialog（有 SweetAlert2 就用它）。舊版在沒有 Swal 時只寫 console，
+      // 使用者完全看不到補償寫入失敗，履歷漏記卻無人察覺。
+      const msg = `補償寫入失敗，請聯繫管理員手動補記錄。\n${e.message}`;
+      if (window.SdaDialog) {
+        window.SdaDialog.show({ icon: 'warn', title: '警告', text: msg, confirmLabel: '確定', style: DIALOG_STYLE });
       } else {
-        console.warn(msg);
+        console.warn(`[sda] ${msg}`);
       }
     }
   };
