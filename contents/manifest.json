@@ -1,6 +1,6 @@
 {
   "manifest_version": 1,
-  "version": "1.16.0",
+  "version": "1.17.7",
   "type": "APP",
   "name": {
     "ja": "ステータス駆動アクションプラグイン",

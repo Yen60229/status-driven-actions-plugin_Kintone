@@ -30,6 +30,7 @@
 7. [更新外掛版本](#7-更新外掛版本)
 8. [常見問題](#8-常見問題)
 9. [執行 Log（記錄每次執行結果）](#9-執行-log記錄每次執行結果)
+10. [建立人狀態檢查（一覽表按鈕）](#10-建立人狀態檢查一覽表按鈕)
 - [附錄 A：欄位代碼在哪裡找](#附錄-a欄位代碼在哪裡找)
 - [附錄 B：技術說明（開發者參考）](#附錄-b技術說明開發者參考)
 
@@ -643,6 +644,109 @@
 
 ---
 
+## 10. 建立人狀態檢查（一覽表按鈕）
+
+> v1.17.0 新增。用途：**快速找出「建立人已離職／帳號已停用」的申請單**，並就地修正或刪除。
+
+### 這個功能在做什麼
+
+在 App 一覽表的上方加一顆按鈕。按下去之後：
+
+1. 抓取「**目前一覽表篩選條件下**」的記錄（不是整個 App，所以先用一覽表篩出你要檢查的範圍）。
+2. 取出每筆記錄的「**建立人**」，向 cybozu.com 共通管理查這些帳號的狀態。
+3. 用一個視窗列出全部記錄，並標記：
+
+| 標記 | 意思 |
+|---|---|
+| 正常 | 帳號存在且啟用中 |
+| **已停用** | 帳號還在共通管理裡，但已停用（`valid = false`）— 通常就是離職 |
+| **已刪除** | 共通管理裡已經查不到這個帳號 |
+| 查不到 | 沒填權杖、查詢失敗，或該筆沒有建立人資訊 |
+
+4. 視窗裡可以：切換「只看異常」、勾選記錄、**就地修改**你指定的欄位、**刪除**勾選的記錄。
+
+### 步驟 1：取得 cybozu.com 共通管理 API 權杖
+
+1. 右上角使用者圖示 → **cybozu.com 共通管理**
+2. 左側「**外部服務連携**」→「**API 權杖**」
+3. 新增一支權杖，權限（Scope）勾 **Read** 就夠（本功能只讀取使用者資料）
+4. 複製那串 `cy.s.api1.…` 開頭的字串
+
+> ⚠️ 這**不是** App 設定裡的那種 API Token。兩者認證方式不同（共通管理權杖走 `Authorization: Bearer`），
+> 所以一定要填在下面指定的那一欄，填錯位置不會生效。
+
+### 步驟 2：填入外掛設定
+
+**第 1 區「API Token 設定」** → 找到「**共通管理 API 權杖**」欄位貼上，按旁邊的「**測試連線**」確認。
+
+> 測試會直接用瀏覽器打一次 `/v1/users.json`，不會先儲存任何設定，按了「測試連線」不等於按了「儲存」。
+> 顯示「✓ 連線成功」才算可用。出現 401／403 表示權杖無效、已失效或 Scope 不足。
+
+### 步驟 3：設定按鈕與表格
+
+**第 5 區「建立人狀態檢查（一覽表按鈕）」**：
+
+| 設定 | 說明 |
+|---|---|
+| 啟用 | 打勾才會在一覽表出現按鈕 |
+| 按鈕文字 | 預設「建立人狀態檢查」 |
+| 掃描上限 | 一次最多掃幾筆（預設 500，上限 5000）。避免一覽表沒篩選就整個 App 掃下去 |
+| 預設檢視 | 打開視窗時就先只顯示異常的記錄（視窗內仍可切回全部） |
+| 允許就地編輯 | 關掉＝整張表唯讀 |
+| 允許刪除記錄 | 打開才會出現「刪除選取」鍵 |
+| 限制可使用對象 | 打開才會顯示下面的使用者／部門／群組名單設定（見下一節）。不打開＝所有能看到一覽表的人都能看到按鈕 |
+| 顯示欄位 | 表格要顯示哪些欄位（由上而下＝由左而右）。每個欄位可再勾「可編輯」 |
+
+「建立人」與「帳號狀態」是固定欄，不用自己加。
+
+### 步驟 4：（選填）限制可使用對象
+
+按鈕預設所有能看到一覽表的人都能看到。若只想開放給特定人，把「限制可使用對象」打開，會出現三欄，**符合任一項就能看到按鈕**：
+
+| 欄位 | 內容 |
+|---|---|
+| 使用者 | 個別使用者 |
+| 部門 | 部門（組織） |
+| 群組 | 群組 |
+
+每一欄都是打一兩個字搜尋姓名／代碼，選一個就變成一個可移除的標籤（chip），可以繼續搜尋加下一個。**搜尋名單需要第 1 區的「共通管理 API 權杖」**（用來向 cybozu.com 共通管理要使用者／部門／群組清單）；還沒填的話，該欄會顯示提示，並改成一個文字框讓你直接輸入完整代碼、按 Enter 新增（沒有搜尋建議）。
+
+三個名單都留空會被擋下無法儲存（等於按鈕永遠不顯示，多半是忘記填）。
+
+**可以就地編輯的欄位型別**：所有非系統欄位——單行文字、多行文字、RTF 文字、數值、連結、下拉選單、單選按鈕、核取方塊、複選、日期、時間、日期時間、使用者選擇、組織選擇、群組選擇。
+選擇類欄位都是「打字搜尋 → 點選」：
+- 下拉／單選／核取方塊／複選：搜尋該欄位自己的選項。
+- 使用者／組織／群組：搜尋 cybozu.com 通訊錄（需在第 1 區填「共通管理 API 權杖」；沒填時改成輸入完整代碼按 Enter）。已停用的帳號不會出現在搜尋結果。
+- Lookup（關聯）欄位：直接搜尋關聯 App 的記錄（套用 Lookup 設定的篩選條件與排序），儲存後 kintone 會自動帶入對應欄位。
+
+唯讀的只剩：系統欄位（記錄編號、建立人、更新人、建立／更新時間、狀態、作業者、類別）、計算欄位（kintone 不允許寫入），以及附件、子表格（不適合在一行表格裡編輯）。設定畫面會直接顯示「唯讀（型別）」，不讓你誤設。
+
+填好按「**儲存**」→ 回到 App「**更新 App**」即生效。
+
+### ⚠️ 三件要知道的事
+
+1. **權限完全等同操作者本人。** 記錄的讀取、修改、刪除都用操作者自己的身分，不套任何 API Token。
+   看不到的記錄不會出現在表格裡；沒有編輯權的列會標「🔒唯讀」；沒有刪除權的列會被刪除動作跳過並回報。
+   「共通管理 API 權杖」只用來查帳號狀態，不會擴大任何記錄權限。
+2. **刪除不可復原。** 按「刪除選取」後會出現紅色確認條，要再按一次「確定刪除 N 筆」才真的送出。
+3. **建立人不能改。** kintone 的「建立人」是系統欄位，API 也不能改寫。要轉移承辦請改你自己的承辦人欄位
+   （把該欄位設成顯示欄位並勾「可編輯」，就能在這張表批次改）。
+4. **「可使用對象」只是隱藏按鈕，不是額外的安全機制。** 不符合名單的人一樣看不到記錄裡「共通管理 API 權杖」等機密內容——那些本來就沒有洩漏管道；這個設定純粹是「誰的一覽表上會出現這顆按鈕」。真正的記錄權限仍完全由 kintone 本身的權限設定決定（見上面第 1 點）。
+
+### 常見狀況
+
+| 狀況 | 原因 |
+|---|---|
+| 按鈕沒出現 | 第 5 區沒勾「啟用」，或 App 沒按「更新 App」 |
+| 全部顯示「查不到」 | 沒填共通管理 API 權杖，或權杖失效（回設定頁按「測試連線」） |
+| 表格是唯讀的 | 「允許就地編輯」沒開，或顯示欄位都沒勾「可編輯」，或該欄位型別不支援 |
+| 沒有「刪除選取」鍵 | 「允許刪除記錄」沒開，或你對列出的記錄都沒有刪除權限 |
+| 提示「已達上限」 | 篩選範圍超過掃描上限，請在一覽表縮小篩選條件再按 |
+| 開了「限制可使用對象」但自己也看不到按鈕 | 檢查自己的登入代碼／部門／群組是否真的在名單裡；部門／群組限制沒填共通管理 API 權杖時一律視為不符合 |
+| 「限制可使用對象」搜尋不到人／部門／群組 | 沒填第 1 區的共通管理 API 權杖就無法搜尋，該欄會改成純文字輸入；填好權杖後重新整理設定頁再試 |
+
+---
+
 ## 附錄 A：欄位代碼在哪裡找
 
 1. App 設定（右上角齒輪）
@@ -663,12 +767,14 @@
 - `contents/dist/desktop.js`、`contents/dist/mobile.js`：**內容完全相同**（同一份 runtime）。維護時只改 `desktop.js`，再覆蓋到 `mobile.js`。
 - 單一檔案同時註冊電腦版與手機版事件名稱（`app.record.*` 與 `mobile.app.record.*`）；kintone 會自動忽略與當前平台不符的事件名稱。
 - `contents/dist/config.js`：設定畫面（純 JS 動態渲染到 `#ui-section`）。
-- `contents/dist/dialog.js`（v1.15.0）：**三邊共用**的提醒視窗元件，`manifest.json` 的 `desktop.js` / `mobile.js` / `config.js` 三個陣列都載入它，且都排在各自主檔之前。它只掛 `window.SdaDialog = { show, buildCss, DEFAULT_STYLE }`，不註冊任何事件。**共用是刻意的**：設定畫面的「預覽」呼叫的就是 runtime 那支 `show()`，預覽與實際不可能不一致。這支檔案不需要像 desktop/mobile 那樣複製。
+- `contents/dist/dialog.js`（v1.15.0）：**三邊共用**的提醒視窗元件，`manifest.json` 的 `desktop.js` / `mobile.js` / `config.js` 三個陣列都載入它，且都排在各自主檔之前。它只掛 `window.SdaDialog = { show, showPanel, buildCss, hasSwal, DEFAULT_STYLE }`（`showPanel` 為 v1.17.0 新增的表格型面板，見 B-15），不註冊任何事件。**共用是刻意的**：設定畫面的「預覽」呼叫的就是 runtime 那支 `show()`，預覽與實際不可能不一致。這支檔案不需要像 desktop/mobile 那樣複製。
 - 設定值透過 `kintone.plugin.app.getConfig/setConfig` 以單一 JSON 字串（`data`）存取。
 
 ### B-2. 註冊的事件（被動觸發，無背景常駐）
 
-註冊 8 個「使用者操作」事件：`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`（另加 `create.submit.success`／`edit.submit.success` 給 Log 確認存檔成功，見 B-8b）。
+註冊 9 個「使用者操作」事件：`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`、`index.show`（另加 `create.submit.success`／`edit.submit.success` 給 Log 確認存檔成功，見 B-8b）。
+
+`index.show`（v1.17.0）**只掛「建立人狀態檢查」按鈕，不跑任何規則**——規則的一覽表時機是 `index.edit.*`。未啟用該功能時 handler 第一行就 return，零成本。
 
 - **無** `setInterval`／輪詢／常駐迴圈；唯一的 `setTimeout` 是 `setFieldShown` 的下一個 tick（0ms）。
 - 每次觸發先做快速退出：無規則就立刻 return；需要時間才打 API。對低階電腦無負擔。
@@ -694,6 +800,7 @@
 - `CONFIG.selfAppToken`：本 App Token，補償寫入用。
 - `CONFIG.logAppId` / `CONFIG.logToken`：執行 Log 用（見 B-8）；若兩者都有，啟動時把 logToken 併入 `TOKENS[logAppId]`。
 - `apiWithToken(path, method, body, appIdForToken)`：有對應 Token 時用 `fetch` + `X-Cybozu-API-Token` header；否則退回 `kintone.api`（plugin proxy，走使用者 session）。
+- `CONFIG.hasAdminApiToken`（v1.17.0）：是否已設定 **cybozu.com 共通管理 API 權杖**。這支權杖與 App Token 是**兩套完全不同的認證**（`Authorization: Bearer` vs `X-Cybozu-API-Token`），因此它在 `config.js` 的 `save()` 裡是在 `combined` 算完之後才放進 `tokenMap`——絕不可混進那串逗號分隔的 `X-Cybozu-API-Token`。代理設定另外註冊一組 `${location.origin}/v1/` 的 GET header，見 B-15。
 
 ### B-5. 時間來源
 
@@ -769,6 +876,8 @@
 ### B-8b. 寫 Log 的兩層保底
 
 `writeLog` 先寫完整 7 欄位；若失敗（最常見為欄位代碼/類型設錯），自動改用**最小欄位**（`LOG_EVENT`／`LOG_RESULT`／`LOG_MESSAGE`，皆純文字，並把分類併入訊息）重試一次，避開脆弱的數值（`LOG_APP`/`LOG_RECORD`）與 `USER_SELECT`（`LOG_USER`）欄位；兩次都失敗才放棄。`postLog()` 為純送出函式。
+
+退化到最小欄位時，`LOG_MESSAGE` 會把完整寫入失敗的原始錯誤（`e.message`）一併附加在訊息末尾（`\n（完整欄位寫入失敗，已退化為最小欄位；原始錯誤：...）`），讓事後查 Log App 也能直接看到失敗原因，不必只靠當下操作者瀏覽器的 console（console 內容通常留不久、且很少人會截圖回報）。
 
 ### B-9. 欄位值寫入判別（classifyWrite）
 
@@ -938,6 +1047,132 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 - `openTextModal` 的確定鈕改為 `async`（`await onConfirm(...)`），因為「匯入設定」需要在 modal 內再跳一層確認並依結果決定要不要關閉 modal。
 - 儲存成功的提示改為 `.then()` 後才 `location.href` 跳轉——原本 `alert` 是同步阻塞，換成非同步視窗後若不等它關閉，導頁會把訊息一起帶走。
 - `compensationWrite` 的失敗警告從直接呼叫 `window.Swal` 改為 `SdaDialog.show()`。舊版在沒有 Swal 時只寫 `console.warn`，使用者完全看不到補償寫入失敗、履歷漏記卻無人察覺。
+
+### B-15. 建立人狀態檢查（v1.17.0）
+
+一覽表按鈕 → 掃描篩選結果 → 查建立人帳號狀態 → 可就地編輯／刪除。與規則引擎**完全無關**，不共用任何比對路徑。
+
+**設定結構（`state.creatorCheck`，非機密，隨匯出匯入走）**
+
+```jsonc
+{
+  "enabled": false,
+  "buttonLabel": "建立人狀態檢查",
+  "columns": [ { "field": "請款單編號", "editable": false } ],
+  "allowEdit": true,
+  "allowDelete": false,
+  "maxRecords": 500,
+  "onlyInvalidDefault": false,
+  "visibility": {                 // 可使用對象（v1.17.1）
+    "mode": "all",                 // all=所有人 / restricted=限制名單
+    "users": [],                   // 登入代碼陣列
+    "organizations": [],           // 部門代碼陣列（需共通管理 API 權杖才能驗證）
+    "groups": []                   // 群組代碼陣列（需共通管理 API 權杖才能驗證）
+  }
+}
+```
+
+權杖本身存 `state.adminApiToken`，但**不進一般設定**：`save()` 只寫 `hasAdminApiToken` 旗標，明文送進加密代理設定（同 B-12 的保護模型）。匯入時 `creatorCheck` **會**被覆蓋（純欄位代碼與開關），`adminApiToken` 不會。
+
+**兩套認證，兩組代理設定**
+
+| API | 前置比對 URL | Header |
+|---|---|---|
+| kintone REST | `kintone.api.url('/k/v1/record.json', true)` 去掉 `record.json` | `X-Cybozu-API-Token: <逗號分隔多把>` |
+| 共通管理 User API | `${location.origin}/v1/` | `Authorization: Bearer <cy.s.api1.…>` |
+
+兩個前置字串不會互相命中（`https://d/v1/` 不是 `https://d/k/v1/` 的前置），客人空間也不影響——User API 不在 `/k/guest/<id>/` 底下。**權杖清空時仍要把 header 覆寫成 `{}`**，否則舊權杖會留在代理設定裡繼續生效。
+
+**設定畫面的「測試連線」直接 `fetch`，不經代理**
+
+一開始的實作是「先 `setProxyConfig` 寫入、再 `kintone.plugin.app.proxy` 呼叫」，想比照 runtime 完全不讓明文權杖進瀏覽器。但 `kintone.plugin.app.proxy` 只在**記錄畫面**（App 自訂 JS／外掛的 `desktop.js`／`mobile.js`）可正常以 Promise 形式使用；在**外掛設定畫面**（`config.js` 執行的頁面）呼叫時，await 後拿到的不是 `[body, status, headers]` 陣列，解構賦值直接丟 `TypeError: … is not iterable`。
+
+因此改成設定畫面的測試連線直接在瀏覽器用 `fetch(url, { headers: { Authorization: 'Bearer '+token } })` 打 `/v1/users.json?size=1`。這不是新的外洩面——`state.adminApiToken` 這個明文值本來就在管理者自己瀏覽器的 JS 記憶體裡（他剛打進 password 欄位），直接 `fetch` 沒有讓任何**其他人**看到它；只是不再假裝走加密代理。同域（同一個 `*.cybozu.com`）也不會有 CORS 問題。**測試不再需要事先寫入任何東西**，按「儲存」才會把權杖送進加密代理設定，因此也不再跳確認框。
+
+runtime（`desktop.js`）本身仍然走加密代理（`kintone.plugin.app.proxy`），因為記錄畫面上的呼叫是原本就驗證過可行的路徑，也是唯一能不讓一般使用者看到權杖的做法。
+
+**按鈕外觀（v1.17.1）**
+
+一覽表工具列本身是白底，早期版本的按鈕也是白底＋灰框，混在原生 kintone 按鈕堆裡不容易一眼找到。改成實心色底（`background: DIALOG_STYLE.buttonColor`，預設 `#7b68ee`，管理者可在第 4 區「提醒視窗外觀」改，兩處共用同一個顏色設定，不必為這顆按鈕另開一組配色）＋白字＋前綴一個 🔍 圖示、輕微陰影。查詢中會把按鈕文字換成「查詢中…」並停用 —— 圖示與文字分別是獨立的 `<span>`（`btn._sdaLabelEl` 存文字節點的引用），查詢結束只換文字節點，圖示不會被覆蓋掉。
+
+**可使用對象（v1.17.1，`ccCheckVisibility`）**
+
+`mountCreatorCheckButton` 掛按鈕前先問 `ccCheckVisibility()`：`visibility.mode !== 'restricted'` 直接放行（預設行為，向下相容）。限制模式下依序判斷：
+
+1. 三個名單都空 → 直接不顯示（設定畫面的 `validate()` 已擋下這種存檔，但 runtime 仍防禦一次，避免手動改壞的設定檔造成按鈕對所有人可見或不可見的意外行為）。
+2. `kintone.getLoginUser().code` 在 `visibility.users` 裡 → 放行。拿不到 `getLoginUser()`（理論上不會發生）時**放行**而非擋下——寧可多顯示，不要因為一個取不到登入資訊的邊角情況讓所有人都看不到按鈕。
+3. 都不在 `users` 名單，但 `organizations`／`groups` 有值 → 沒有 `HAS_ADMIN_API` 時直接不放行（`console.warn` 說明原因）；有的話依序打 `/v1/user/organizations.json?code=` 與 `/v1/user/groups.json?code=`（`userApiGet`，與帳號狀態查詢共用同一支加密代理），比對 `organizationTitles[].organization.code` 與 `groups[].code` 是否命中名單。
+4. 任一查詢拋錯 → 視為不符合（不放行），`console.warn` 記下原因，不讓錯誤直接把按鈕漏顯示給不該看到的人（保守方向：查不到就當作沒有權限，而不是當作有權限）。
+
+這個限制只決定「誰的一覽表上會出現按鈕」，不是額外的資料保護層——按下按鈕之後的記錄讀取／修改／刪除仍完全由 kintone 記錄權限決定（B-15 前段「權限模型」一節）。
+
+**設定畫面的可使用對象搜尋（v1.17.2，`config.js`）**
+
+`visibility.users`／`organizations`／`groups` 一開始是「填代碼、逗號分隔」的純文字輸入，管理者反映打代碼太不直覺，改成打一兩個字就能搜尋姓名／代碼、點選加入的多選 chips 元件。實作重點：
+
+- **一次抓全部、之後全在瀏覽器篩選**，不是每打一個字就打一次 API。共通管理 User API（`/v1/users.json`／`/v1/organizations.json`／`/v1/groups.json`）不支援關鍵字模糊搜尋，只能用 `codes`/`ids`/`size`/`offset` 精確查或分頁列舉，所以 `ccFetchAllPages(kind)` 用 `size=100` + `offset` 分頁把整份名單（使用者／部門／群組）抓完（上限 50 頁＝5000 筆，與 runtime `ccFetchUsersAll` 的上限一致），`ensureCcDirectory(kind)` 快取結果到 `CC_DIRECTORY[kind]`（`idle`／`loading`／`done`／`error` 四態），同一次設定畫面 session 只抓一次。抓的時候直接用 `fetch` + `Authorization: Bearer`，理由與「測試連線」相同：這裡是外掛設定畫面，`kintone.plugin.app.proxy` 在這個情境下不可靠（見上一節）。
+- **`searchAddInput(options, onPick, placeholder)`**：套用既有的 `.sda-ss-*` 樣式（跟規則編輯器的 `searchableSelect`／`fieldCombo` 同一組 CSS，設定畫面視覺一致），差別是「選中即呼叫 `onPick` 並清空輸入框」而非「設成目前值」——這樣才能連續加好幾個人不用重新點欄位。列表本身也做了 50 筆的顯示上限，避免大型租戶一次渲染幾千個 `<div>`。
+- **`renderCodePicker(kind, arr)`**：已選的項目顯示成 chip（帶 ✕ 移除鍵），下拉排除已選項目（`dirEntry.opts.filter(o => !arr.includes(o.v))`），避免選兩次。**沒有共通管理 API 權杖時**直接退化成一個「輸入完整代碼、按 Enter 新增」的純文字框——不擋住整個功能，只是失去搜尋能力；沒填權杖也想先把已知代碼打進去的情境仍然可行。chip 上的名稱若名單還沒載入完成，先顯示「代碼（尚未載入名稱）」，名單載入後 `render()` 會補上正確姓名。
+
+**runtime 流程（`openCreatorCheckPanel`）**
+
+1. `/k/v1/app/form/fields.json` 取欄位 metadata（label／type／下拉選項）。
+2. **探測一筆記錄認出「建立人」的欄位代碼**：內建欄位代碼會隨 App 建立語系而異（中文 `建立人` / 日文 `作成者` / 英文 `Created_by`），且沒放到表單上時 `form/fields.json` 不一定查得到；`records.json` 一定會回內建欄位，所以用 `limit 1` 撈一筆、找 `type === 'CREATOR'` 的 key，再退回 `form/fields.json`，最後才逐一試 `CC_CREATOR_FALLBACK_CODES`（`建立人` 優先）。同時這一步也負責「沒有記錄」的早退。
+3. `ccFetchRecords`：`kintone.app.getQueryCondition()`（手機版走 `kintone.mobile.app`）+ `limit/offset` 分頁，只取需要的 `fields`（`$id`／`$revision`／建立人／設定的顯示欄位），累積到 `maxRecords` 為止。`getQueryCondition()` 不含 `order by`／`limit`，可直接串接。
+4. `ccFetchUsers`：`/v1/users.json?codes[]=…&size=100`。`size` 上限是 100，所以 codes 也以 100 為一批（`chunk(codes, 100)`）並明示 `size=100`——依賴對方的預設值等於把批次大小的正確性交給別人。回傳裡沒有的 code＝共通管理已刪除（`gone`）；`valid === false`＝停用（`off`）。
+   **退路 `ccFetchUsersAll`**：codes 查詢整批拋錯時（例如某個 code 已刪除而 API 直接回錯而不是略過），改成 `size=100` + `offset` 分頁把全部使用者列出來，上限 50 頁（5000 人）。慢，但不受「查不到的 code」影響。
+5. `ccEvaluateRights`：`/k/v1/records/acl/evaluate.json`（一次最多 100 筆 ids）取每筆的 `editable`／`deletable`。查詢失敗時該批視為可編輯可刪除——最終仍由 kintone 擋，寧可讓使用者撞到真正的錯誤訊息，也不要因為輔助查詢失敗就把整個功能鎖死。
+6. 建表、掛事件、`SdaDialog.showPanel()`。有實際改動過（`needsReload`）才在關閉後 `location.reload()`。
+
+表格第一欄固定是「記錄編號」（`row.id`），做成 `<a target="_blank" rel="noopener">` 連到 `${location.origin}/k/${appId}/show#record=${row.id}`——點了在新分頁開啟該筆記錄詳細畫面，方便核對異常帳號時直接跳過去看記錄內容（v1.17.3）。純前端組字串，不額外打 API；連結本身沒有欄位權限或 App 存取權判斷，實際能不能看到該筆記錄仍由 kintone 原生的記錄／App 權限決定。
+
+**權限模型：記錄操作一律用操作者 session**
+
+讀取（`records.json`）、更新（`PUT records.json`）、刪除（`DELETE records.json`）全部走 `kintone.api`，**不經 `apiWithToken`、不套任何 App Token**。這是刻意的：這顆按鈕是給人操作的批次工具，能看到什麼、能改能刪什麼，必須完全等同他本來的權限。共通管理權杖只用來讀帳號狀態，不會擴大任何記錄權限。
+
+**就地編輯的型別白名單**
+
+`CC_EDITABLE_TYPES`（v1.17.5 起）＝所有「非系統、API 可寫」的型別：`SINGLE_LINE_TEXT`、`MULTI_LINE_TEXT`、`RICH_TEXT`、`NUMBER`、`LINK`、`DROP_DOWN`、`RADIO_BUTTON`、`CHECK_BOX`、`MULTI_SELECT`、`DATE`、`TIME`、`DATETIME`、`USER_SELECT`、`ORGANIZATION_SELECT`、`GROUP_SELECT`。`config.js` 的 `CREATOR_CHECK_EDITABLE_TYPES` **必須與它一致**，否則設定畫面說可以編、實際卻是唯讀。
+不在清單內而唯讀的：系統欄位（`RECORD_NUMBER`／`CREATOR`／`MODIFIER`／`CREATED_TIME`／`UPDATED_TIME`／`STATUS`／`STATUS_ASSIGNEE`／`CATEGORY`）與 `CALC`（API 不能寫）；`FILE`、`SUBTABLE` 雖可由 API 寫，但需上傳檔案／整張子表列結構，塞進單列表格不實際，維持唯讀。
+
+**依型別的編輯器（`ccMakeEditor`）**
+
+| 型別 | 編輯器 | 送出的 value 形狀 |
+|---|---|---|
+| Lookup 欄位（`field.lookup` 存在，不論 `SINGLE_LINE_TEXT`／`NUMBER`） | `ccPicker` 單選；`ccLookupSearch` 以操作者 session 查 `lookup.relatedApp`：`(filterCond) and 關鍵欄位 like "關鍵字" order by sort limit 30`，選單附帶 `lookupPickerFields` 前 3 個欄位當副標。關鍵欄位型別由關聯 App 的 `form/fields.json` 判斷（快取一次）：文字類用 `like`，數值類只接受數字並用 `=`，留空列出前 30 筆 | 字串；kintone 存檔時會自己執行 Lookup 並帶入對應欄位 |
+| `DROP_DOWN`／`RADIO_BUTTON` | `ccPicker` 單選，選項過濾；`RADIO_BUTTON` 不可清空（沒有 × 鍵） | 字串 |
+| `CHECK_BOX`／`MULTI_SELECT` | `ccPicker` 複選 chips，已選的選項不再出現在選單 | 字串陣列 |
+| `USER_SELECT`／`ORGANIZATION_SELECT`／`GROUP_SELECT` | `ccPicker` 複選；有共通管理 API 權杖時 `ccDirectory(type)` 分頁抓整份名單（`users.json`／`organizations.json`／`groups.json`，上限 50 頁，快取 promise，失敗會清快取下次重抓），依姓名或代碼過濾，**已停用（`valid=false`）的使用者不列入**；沒有權杖時退化成「輸入完整代碼按 Enter」 | `[{ code }]` |
+| `DATETIME` | `input[type=datetime-local]`；顯示時 ISO → 本地時間，送出時本地時間 → `toISOString()` 去掉毫秒 | `YYYY-MM-DDTHH:mm:ssZ`（UTC） |
+| `MULTI_LINE_TEXT`／`RICH_TEXT` | `textarea`（`RICH_TEXT` 直接編 HTML 原始碼） | 字串 |
+| 其他（文字／數值／連結／日期／時間） | 原生 `input` | 字串 |
+
+`DATE` → `input[type=date]`、`TIME` → `input[type=time]`，kintone 的值格式（`YYYY-MM-DD`／`HH:mm`）與原生控件完全一致，不需轉換。
+
+**`ccPicker` 下拉選單定位**：選單 `append` 到 `document.body` 並用 `position:fixed`（z-index 100100，高於面板的 100000），因為表格外層 `.sda-panel-scroll` 是 `overflow:auto`，放在格子裡會被裁掉。捲動時（capture 監聽所有捲動）**跟著輸入框重新定位而不是關閉**——點進一個部分在畫面外的欄位時，瀏覽器會自動把表格捲過去，若捲動就關閉，選單會一閃即逝。選項用 `mousedown` + `preventDefault` 觸發，避免先觸發輸入框 blur 把選單關掉。整個 `.sda-pick` 框（含 chip 與空白處，× 鍵除外）的 `mousedown` 都會把焦點導到輸入框並開選單（v1.17.6）——否則只有 chip 旁那一小段輸入框能點，使用者會以為欄位不能改。
+
+**dirty 判定（`ccNormValue`）**：陣列值比較時取每個元素的 `code`（物件）或字串本身、排序後比對，所以使用者把值改掉又改回原樣，該列不會被當成待儲存，也不會被送出。
+
+**批次寫入**
+
+`PUT /k/v1/records.json` 每批 100 筆，帶 `revision`（樂觀鎖；別人同時改過就讓它失敗，比默默覆蓋好）。成功後把回傳的新 `revision` 寫回列狀態、清掉 `dirty`，所以同一個視窗裡可以連續存好幾次。每批獨立 try/catch，一批失敗不影響其他批，訊息列顯示成功筆數與第一個錯誤。
+
+**`SdaDialog.showPanel()`（`dialog.js`）**
+
+`show()` 的表格版：內容是呼叫端給的 `HTMLElement`，面板只負責標題、外框、關閉鍵。有 `window.Swal` 就用 `Swal.fire({ html: node })`，沒有就用內建 `.sda-pnl` 覆蓋層；`onReady({ close })` 讓呼叫端拿到程式化關閉的手把。
+
+- **動作鍵一律做在 content 裡，不做成面板按鈕**：SweetAlert2 同時只能開一個視窗，在面板裡再 `fire` 一次確認框會把面板整個換掉。所以刪除的二次確認用**行內紅色確認條**（`.sda-panel-confirm`），不用嵌套視窗。
+- SweetAlert2 那邊要另外把 `.swal2-html-container` 的 `white-space: pre` 解掉（提醒視窗需要 `pre`，表格需要 `normal`，不解會把儲存格硬撐開）——這就是 `.sda-swal-panel` 這個額外 class 存在的唯一原因。
+- 表格樣式（`.sda-panel-*`）與提醒視窗共用同一個 `<style id="sda-dlg-style">`，`PANEL_CSS` 接在 `buildCss()` 的輸出裡，兩種渲染器都吃得到。
+
+**對外暴露**
+
+```js
+const { users } = await window.NXSdaUserApi.get('users.json', { codes: ['a', 'b'] });
+const orgs      = await window.NXSdaUserApi.get('user/organizations.json', { code: 'a' });
+```
+
+`get(path, params)` 走同一組代理設定（`/v1/` 前置的 GET），所以 App 自訂 JS 也能查帳號／組織而不接觸權杖。陣列參數自動展開成 `key[]=`。
 
 ---
 

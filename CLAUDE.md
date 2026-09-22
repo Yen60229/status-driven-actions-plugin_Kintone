@@ -99,6 +99,8 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 觸發複選 | `triggerMatches`／`statusMatches` 依實際觸發事件分流；`rule.trigger` 可逗號分隔複選（v1.9.0） | B-10b |
 | 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`）：**呼叫當下**偵測 `window.Swal`，有就用 SweetAlert2、沒有才用內建元件，樣式以 `.sda-swal` 收斂（v1.16.0） | B-14 |
 | 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算）；`buildOtherPayload` 回傳 `{payload,suspects}`，`fieldCopy` 來源欄位不存在／`dateShift` 空值時標記可疑；`badFieldsFromError` 解析 kintone `errors` 指名欄位 | B-11 |
+| 共通管理 API | `userApiGet`：cybozu.com 共通管理 User API（`/v1/users.json` 等）走 `Authorization: Bearer <cy.s.api1.…>`，與 App Token 是**兩套認證**，代理設定另註冊 `${location.origin}/v1/` 的 GET header；對外暴露 `window.NXSdaUserApi.get(path, params)` | B-4、B-15 |
+| 建立人狀態檢查 | `mountCreatorCheckButton`／`openCreatorCheckPanel`（`index.show` 掛按鈕）：掃一覽表篩選結果 → 查建立人帳號 `valid` → `SdaDialog.showPanel()` 表格（勾選／就地編輯／刪除）。記錄的讀改刪**一律用操作者 session**，不套 Token；`CC_EDITABLE_TYPES` 必須與 `config.js` 的 `CREATOR_CHECK_EDITABLE_TYPES` 一致；`ccCheckVisibility` 依 `visibility.mode`（`users`/`organizations`/`groups` 名單）決定按鈕要不要對目前登入者顯示，部門／群組判斷需共通管理 API 權杖；`config.js` 用 `ensureCcDirectory`+`searchAddInput` 把三個名單做成打字搜尋、多選 chips（一次抓全部快取，不逐字打 API），無權杖時退化成手動輸入代碼（v1.17.0；`visibility` 為 v1.17.1，搜尋 UI 為 v1.17.2） | B-15 |
 | 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；觸發時機用 `triggerCheckboxGroup` 複選（v1.9.0）；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
 **先讀附錄 B 再動程式碼**——它是這份 runtime 的權威說明。
@@ -112,7 +114,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ### 匯入規則（重要）
 
-- 設定畫面的「**匯入設定**」只套用 `rules` 與 `dialogStyle`（v1.15.0），**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`（避免把來源 App 的 Token／App ID 誤帶過去）。
+- 設定畫面的「**匯入設定**」只套用 `rules`、`dialogStyle`（v1.15.0）與 `creatorCheck`（v1.17.0），**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`／`adminApiToken`（避免把來源 App 的 Token／App ID 誤帶過去）。
 - 因此自動產生時，**只要輸出 `rules`**即可（有提醒視窗規則且想指定外觀時再加 `dialogStyle`）。可給下列任一形狀：
   - `{ "rules": [ ...規則... ] }`
   - 或直接一個陣列 `[ ...規則... ]`
@@ -129,6 +131,13 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
   ],
   "logAppId": "",                 // 執行 Log App ID（匯入不覆蓋）
   "logToken": "",                 // Log App Token（匯入不覆蓋）
+  "adminApiToken": "",            // cybozu.com 共通管理 API 權杖 cy.s.api1.…（匯入不覆蓋；只存加密代理設定，一般設定僅留 hasAdminApiToken 旗標）
+  "creatorCheck": {               // 建立人狀態檢查（v1.17.0；非機密，匯入【會】覆蓋）
+    "enabled": false, "buttonLabel": "建立人狀態檢查",
+    "columns": [ { "field": "請款單編號", "editable": false } ],
+    "allowEdit": true, "allowDelete": false, "maxRecords": 500, "onlyInvalidDefault": false,
+    "visibility": { "mode": "all", "users": [], "organizations": [], "groups": [] }  // 可使用對象（v1.17.1）
+  },
   "dialogStyle": {                // 提醒視窗全域外觀（v1.15.0；非機密，匯入【會】覆蓋；width 已於 v1.16.0 移除，寬度全自動）
     "fontSize": 14, "lineHeight": 1.9, "titleSize": 20,
     "radius": 12, "overlay": 0.45, "accent": "#f5a623",
@@ -281,8 +290,10 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ## 註冊的事件（contents/dist/desktop.js 末尾）
 
-`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`，
+`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`、`index.show`，
 另加 `create.submit.success`／`edit.submit.success`（給 Log 確認存檔成功；`index.edit.submit` 無對應 success 事件，不寫 Log，見 README B-2）。
+
+`index.show` 只掛「建立人狀態檢查」按鈕，**不跑規則**（規則的一覽表時機是 `index.edit.*`）。
 
 ---
 

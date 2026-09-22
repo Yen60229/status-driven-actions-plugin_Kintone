@@ -215,6 +215,18 @@ body {
 .sda-msg { font-size: 12px; margin-right: auto; }
 .sda-msg.success { color: #27ae60; }
 .sda-msg.error   { color: #c0392b; }
+
+/* ── Section 5：建立人狀態檢查 ── */
+.cc-grid {
+  display: grid; grid-template-columns: 148px 1fr;
+  gap: 8px 10px; align-items: center;
+}
+.cc-grid-label { font-size: 12px; color: #666; text-align: right; padding-right: 4px; }
+.cc-grid input[type=text], .cc-grid input[type=number] {
+  border: 1px solid #d4d7d7; border-radius: 3px; padding: 4px 8px; font-size: 13px;
+}
+.cc-hint { font-size: 11px; color: #999; margin-left: 8px; }
+.cc-readonly-tag { font-size: 11px; color: #999; }
 </style>
 </head>
 <body>
@@ -261,6 +273,31 @@ body {
     </div>
     <div class="rules-list" id="rulesList"></div>
     <button class="sda-btn sda-btn-add" onclick="addRule()" style="margin-top:12px">+ 新增規則</button>
+  </div>
+
+  <!-- SECTION 5 -->
+  <div class="sda-section">
+    <div class="sda-section-title">5. 建立人狀態檢查（一覽表按鈕）</div>
+    <div class="sda-section-help">
+      在一覽表加一顆按鈕，掃描目前篩選條件下的記錄，用「共通管理 API 權杖」查每筆建立人的帳號狀態，
+      標記已停用／已刪除的帳號，並可就地修改或刪除這些記錄。
+    </div>
+
+    <div class="cc-grid" id="ccGrid"></div>
+
+    <div class="sda-section-help" style="margin-top:14px">
+      顯示欄位：決定視窗表格要顯示哪些欄位（由上而下＝由左而右）。「建立人」與「帳號狀態」是固定欄，不用在這裡加。
+    </div>
+    <table class="sda-table">
+      <thead><tr>
+        <th>欄位</th>
+        <th style="width:90px">可編輯</th>
+        <th style="width:80px">排序</th>
+        <th style="width:48px"></th>
+      </tr></thead>
+      <tbody id="ccColumnsBody"></tbody>
+    </table>
+    <button class="sda-btn sda-btn-add" onclick="addCcColumn()" style="margin-top:8px">+ 新增顯示欄位</button>
   </div>
 
   <div class="sda-toolbar">
@@ -757,6 +794,135 @@ function addRule() {
   card.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
 }
 
+/* ================================================================
+   ⑤ 建立人狀態檢查（一覽表按鈕）
+================================================================ */
+const CC_EDITABLE_TYPES = new Set([
+  'SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'NUMBER', 'LINK',
+  'DROP_DOWN', 'RADIO_BUTTON', 'DATE', 'TIME',
+]);
+
+let creatorCheck = {
+  enabled: false,
+  buttonLabel: '建立人狀態檢查',
+  columns: [
+    { field: 'status_field', editable: false },
+    { field: 'notes', editable: true },
+  ],
+  allowEdit: true,
+  allowDelete: false,
+  maxRecords: 500,
+  onlyInvalidDefault: false,
+};
+
+function fieldTypeOf(code) {
+  const o = FIELD_OPTIONS.find(x => x.v === code);
+  return o ? o.badge : '';
+}
+
+function renderCc() {
+  const grid = document.getElementById('ccGrid');
+  grid.innerHTML = '';
+
+  const addRow = (lbl, ctrl) => {
+    const l = document.createElement('div'); l.className = 'cc-grid-label'; l.textContent = lbl; grid.appendChild(l);
+    grid.appendChild(ctrl);
+  };
+  const mkCb = (checked, onCh, txt) => {
+    const lbl = document.createElement('label'); lbl.className = 'sda-check-label';
+    const c = document.createElement('input'); c.type = 'checkbox'; c.checked = checked;
+    c.addEventListener('change', () => { onCh(c.checked); });
+    lbl.appendChild(c); lbl.appendChild(document.createTextNode(' ' + txt));
+    return lbl;
+  };
+
+  addRow('啟用', mkCb(creatorCheck.enabled, v => { creatorCheck.enabled = v; }, '在一覽表顯示按鈕'));
+
+  const btnLabelInp = document.createElement('input');
+  btnLabelInp.type = 'text'; btnLabelInp.value = creatorCheck.buttonLabel;
+  btnLabelInp.style.width = '220px';
+  btnLabelInp.addEventListener('input', () => { creatorCheck.buttonLabel = btnLabelInp.value; });
+  addRow('按鈕文字', btnLabelInp);
+
+  const maxWrap = document.createElement('div');
+  const maxInp = document.createElement('input');
+  maxInp.type = 'number'; maxInp.min = '1'; maxInp.max = '5000'; maxInp.step = '50';
+  maxInp.value = creatorCheck.maxRecords; maxInp.style.width = '100px';
+  maxInp.addEventListener('input', () => { creatorCheck.maxRecords = maxInp.value === '' ? '' : Number(maxInp.value); });
+  const maxHint = document.createElement('span');
+  maxHint.className = 'cc-hint';
+  maxHint.textContent = '最多掃描幾筆（超過的不列入）';
+  maxWrap.appendChild(maxInp); maxWrap.appendChild(maxHint);
+  addRow('掃描上限', maxWrap);
+
+  addRow('預設檢視', mkCb(creatorCheck.onlyInvalidDefault, v => { creatorCheck.onlyInvalidDefault = v; },
+    '打開時先只顯示帳號異常的記錄'));
+  addRow('允許就地編輯', mkCb(creatorCheck.allowEdit, v => { creatorCheck.allowEdit = v; renderCcColumns(); },
+    '顯示欄位中勾了「可編輯」的才會變成輸入框'));
+  addRow('允許刪除記錄', mkCb(creatorCheck.allowDelete, v => { creatorCheck.allowDelete = v; },
+    '顯示「刪除選取」鍵'));
+
+  renderCcColumns();
+}
+
+function renderCcColumns() {
+  const tbody = document.getElementById('ccColumnsBody');
+  tbody.innerHTML = '';
+
+  creatorCheck.columns.forEach((col, i) => {
+    const tr = document.createElement('tr');
+
+    const tdField = document.createElement('td');
+    const opts = [{ v: '', l: '— 請選擇 —', badge: '' }, ...FIELD_OPTIONS.slice(1)];
+    tdField.appendChild(createSS(opts, col.field, v => { col.field = v; renderCcColumns(); }, true));
+    tr.appendChild(tdField);
+
+    const tdEdit = document.createElement('td');
+    const type = fieldTypeOf(col.field);
+    const canEdit = !col.field || CC_EDITABLE_TYPES.has(type);
+    if (canEdit) {
+      const cb = document.createElement('input'); cb.type = 'checkbox'; cb.checked = !!col.editable;
+      cb.addEventListener('change', () => { col.editable = cb.checked; });
+      tdEdit.appendChild(cb);
+    } else {
+      const tag = document.createElement('span'); tag.className = 'cc-readonly-tag';
+      tag.textContent = '唯讀（' + type + '）';
+      tdEdit.appendChild(tag);
+    }
+    tr.appendChild(tdEdit);
+
+    const tdOrder = document.createElement('td');
+    const up = document.createElement('button'); up.className = 'sda-btn-move'; up.textContent = '↑';
+    up.addEventListener('click', () => {
+      if (i === 0) return;
+      [creatorCheck.columns[i-1], creatorCheck.columns[i]] = [creatorCheck.columns[i], creatorCheck.columns[i-1]];
+      renderCcColumns();
+    });
+    const down = document.createElement('button'); down.className = 'sda-btn-move'; down.textContent = '↓';
+    down.addEventListener('click', () => {
+      if (i >= creatorCheck.columns.length - 1) return;
+      [creatorCheck.columns[i+1], creatorCheck.columns[i]] = [creatorCheck.columns[i], creatorCheck.columns[i+1]];
+      renderCcColumns();
+    });
+    tdOrder.appendChild(up); tdOrder.appendChild(down);
+    tr.appendChild(tdOrder);
+
+    const tdDel = document.createElement('td');
+    tdDel.style.textAlign = 'center';
+    const delBtn = document.createElement('button'); delBtn.className = 'sda-btn sda-btn-del'; delBtn.textContent = '✕';
+    delBtn.addEventListener('click', () => { creatorCheck.columns.splice(i, 1); renderCcColumns(); });
+    tdDel.appendChild(delBtn);
+    tr.appendChild(tdDel);
+
+    tbody.appendChild(tr);
+  });
+}
+
+function addCcColumn() {
+  creatorCheck.columns.push({ field: '', editable: false });
+  renderCcColumns();
+}
+
 function handleSave() { showMsg('✓ 設定已儲存（預覽模式，實際未寫入）','success'); }
 function showMsg(txt, type) {
   const el = document.getElementById('statusMsg');
@@ -765,6 +931,7 @@ function showMsg(txt, type) {
 }
 
 renderAll();
+renderCc();
 </script>
 </body>
 </html>

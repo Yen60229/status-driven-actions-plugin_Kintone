@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.16.0';
+  const UI_VERSION = '1.17.2';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -14,6 +14,25 @@
   if (state.selfAppToken === undefined) state.selfAppToken = '';
   if (state.logAppId === undefined) state.logAppId = '';
   if (state.logToken === undefined) state.logToken = '';
+  if (state.adminApiToken === undefined) state.adminApiToken = '';
+
+  const DEFAULT_CREATOR_CHECK_VISIBILITY = { mode: 'all', users: [], organizations: [], groups: [] };
+  const DEFAULT_CREATOR_CHECK = {
+    enabled: false,
+    buttonLabel: '建立人狀態檢查',
+    columns: [],
+    allowEdit: true,
+    allowDelete: false,
+    maxRecords: 500,
+    onlyInvalidDefault: false,
+    visibility: DEFAULT_CREATOR_CHECK_VISIBILITY,
+  };
+  state.creatorCheck = Object.assign({}, DEFAULT_CREATOR_CHECK, state.creatorCheck || {});
+  if (!Array.isArray(state.creatorCheck.columns)) state.creatorCheck.columns = [];
+  state.creatorCheck.visibility = Object.assign({}, DEFAULT_CREATOR_CHECK_VISIBILITY, state.creatorCheck.visibility || {});
+  ['users', 'organizations', 'groups'].forEach((k) => {
+    if (!Array.isArray(state.creatorCheck.visibility[k])) state.creatorCheck.visibility[k] = [];
+  });
 
   const DEFAULT_DIALOG_STYLE = (window.SdaDialog && window.SdaDialog.DEFAULT_STYLE) || {
     fontSize: 14, lineHeight: 1.9, titleSize: 20, radius: 12,
@@ -21,37 +40,32 @@
   };
   state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, state.dialogStyle || {});
 
-  // ----- SECURE TOKEN STORAGE -----
-  // Token 存放於外掛代理設定（加密於 kintone 伺服器，只有本設定頁能透過 getProxyConfig 讀回；
-  // 一般使用者在記錄頁完全讀不到）。代理設定以「網址前置比對」決定是否注入，因此只要針對
-  // /k/v1/ 前綴為 GET / POST / PUT 各註冊一次，即涵蓋 record.json / records.json 的
-  // 建立、更新、查詢，不需為每個 App 分別註冊。
   const REST_PREFIX = kintone.api.url('/k/v1/record.json', true).replace(/record\.json.*$/, '');
-  // 存放「App → Token」對照的內部欄位；此網址永不會被實際呼叫（.invalid 保證不解析），
-  // 僅供本設定頁 getProxyConfig 回填輸入框使用。
+
   const TOKEN_MAP_URL = 'https://sda-plugin.invalid/token-map';
+
+  const USER_API_PREFIX = `${location.origin}/v1/`;
+  const USER_API_TEST_URL = `${location.origin}/v1/users.json?size=1`;
 
   const readSecuredTokenMap = () => {
     try {
       const cfg = kintone.plugin.app.getProxyConfig(TOKEN_MAP_URL, 'POST');
       if (cfg && cfg.data && cfg.data.map) return JSON.parse(cfg.data.map);
-    } catch (e) { /* 尚未設定過 */ }
+    } catch (e) {  }
     return null;
   };
 
-  // 讀回已加密的 Token 值供編輯；若代理設定尚無資料（首次從舊版遷移），
-  // state 仍保有舊版明文 Token（來自 getConfig），可直接沿用，按一次儲存即完成搬移。
   const _securedMap = readSecuredTokenMap();
   if (_securedMap) {
     if (typeof _securedMap.self === 'string') state.selfAppToken = _securedMap.self;
     if (typeof _securedMap.log === 'string') state.logToken = _securedMap.log;
+    if (typeof _securedMap.adminApi === 'string') state.adminApiToken = _securedMap.adminApi;
     state.tokens.forEach((t) => {
       const v = _securedMap[String(t.appId)];
       if (typeof v === 'string') t.token = v;
     });
   }
 
-  // 儲存代理設定為 callback 型 API，需鏈式呼叫，最後才寫一般設定。
   const chainProxy = (entries, done) => {
     const next = (i) => {
       if (i >= entries.length) return done();
@@ -170,7 +184,6 @@
     { v: 'center', l: '置中（短句建議）' },
   ];
 
-  // 只有這些時機 kintone 會等 handler 的 Promise，按取消才真的攔得住動作。
   const triggerCanBlock = (t) => t === 'process.proceed' || /\.submit$/.test(t);
   const ruleCanBlock = (r) => {
     const list = triggerListOf(r);
@@ -412,18 +425,29 @@
   };
 
   let FIELD_OPTIONS = [{ v: '', l: '— 載入中 —' }];
+  const FIELD_TYPES = {};
   const loadFields = () => {
     if (!window.KintoneConfigHelper) return Promise.resolve([]);
 
     return KintoneConfigHelper.getFields()
       .then((fields) => {
         const opts = [{ v: '', l: '— 請選擇 —' }];
-        (fields || []).forEach((f) => opts.push({ v: f.code, l: `${f.label} (${f.code}) [${f.type}]` }));
+        (fields || []).forEach((f) => {
+          opts.push({ v: f.code, l: `${f.label} (${f.code}) [${f.type}]` });
+          FIELD_TYPES[f.code] = f.type;
+        });
         FIELD_OPTIONS = opts;
         return opts;
       })
       .catch(() => []);
   };
+
+  const CREATOR_CHECK_EDITABLE_TYPES = new Set([
+    'SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT', 'NUMBER', 'LINK',
+    'DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'MULTI_SELECT',
+    'DATE', 'TIME', 'DATETIME',
+    'USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT',
+  ]);
 
   const TARGET_FIELDS = {};
   const ensureTargetFields = (appId) => {
@@ -463,10 +487,9 @@
     root.appendChild(renderRulesSection());
     root.appendChild(renderLogSection());
     root.appendChild(renderDialogStyleSection());
+    root.appendChild(renderCreatorCheckSection());
   };
 
-  // 設定畫面所有的提示 / 確認一律走 SdaDialog（頁面上有 SweetAlert2 就用它），
-  // 不再用瀏覽器原生 alert / confirm。SdaDialog 本身沒載入時才退回原生，確保訊息不會消失。
   const notify = (opts) => {
     if (!window.SdaDialog) { alert(opts.text); return Promise.resolve(true); }
     return window.SdaDialog.show(Object.assign(
@@ -479,8 +502,6 @@
       { icon: 'question', confirmLabel: '確定', cancelLabel: '取消', style: state.dialogStyle }, opts));
   };
 
-  // 預覽走的是 runtime 同一支 SdaDialog.show，所以預覽長什麼樣、使用者就看到什麼樣。
-  // 差別只有 {欄位代碼} 這裡沒有實際記錄可代入，改顯示成〔欄位代碼〕讓管理者看得出位置。
   const previewDialogRule = (r) => {
     if (!window.SdaDialog) { notify({ icon: 'error', title: '無法預覽', text: '提醒視窗元件未載入，請重新整理設定畫面。' }); return; }
     const d = r.dialog || {};
@@ -512,7 +533,6 @@
       '這組設定會隨「匯出／匯入設定」一起帶到其他 App。'
     ]));
 
-    // 兩種渲染器的外觀不同，設定畫面偵測不到 SweetAlert2 時要講清楚預覽可能不等於實際。
     const swalHere = !!(window.SdaDialog && window.SdaDialog.hasSwal && window.SdaDialog.hasSwal());
     sec.appendChild(el('p', {
       class: 'sda-section-help',
@@ -636,6 +656,351 @@
     return sec;
   };
 
+  const testAdminApi = async (btn, out) => {
+    const token = String(state.adminApiToken || '').trim();
+    out.className = '';
+    if (!token) {
+      out.className = 'sda-error';
+      out.textContent = '請先填入共通管理 API 權杖。';
+      return;
+    }
+
+    btn.disabled = true;
+    out.textContent = '測試中…';
+    try {
+      const resp = await fetch(USER_API_TEST_URL, { headers: { Authorization: `Bearer ${token}` } });
+      const body = await resp.text();
+      if (resp.status === 200) {
+        let count = '?';
+        try { count = (JSON.parse(body).users || []).length; } catch (e) {  }
+        out.className = 'sda-success';
+        out.textContent = `✓ 連線成功（取得 ${count} 筆使用者樣本），權杖可用。`;
+      } else if (resp.status === 401 || resp.status === 403) {
+        out.className = 'sda-error';
+        out.textContent = `✕ ${resp.status}：權杖無效、已失效或 Scope 不足（至少需要 Read）。`;
+      } else {
+        out.className = 'sda-error';
+        out.textContent = `✕ HTTP ${resp.status}：${String(body).slice(0, 160)}`;
+      }
+    } catch (e) {
+      out.className = 'sda-error';
+      out.textContent = `✕ 呼叫失敗：${(e && e.message) || String(e)}`;
+    } finally {
+      btn.disabled = false;
+    }
+  };
+
+  const CC_DIR_PATH = { users: 'users.json', organizations: 'organizations.json', groups: 'groups.json' };
+  const CC_DIR_KEY = { users: 'users', organizations: 'organizations', groups: 'groups' };
+  const CC_KIND_LABEL = { users: '使用者', organizations: '部門', groups: '群組' };
+  const CC_DIRECTORY = {
+    users: { status: 'idle', opts: [], error: '' },
+    organizations: { status: 'idle', opts: [], error: '' },
+    groups: { status: 'idle', opts: [], error: '' },
+  };
+
+  const ccFetchAllPages = async (kind) => {
+    const token = String(state.adminApiToken || '').trim();
+    const all = [];
+    let offset = 0;
+    for (let page = 0; page < 50; page++) {
+      const qs = new URLSearchParams({ size: '100', offset: String(offset) });
+      const resp = await fetch(`${USER_API_PREFIX}${CC_DIR_PATH[kind]}?${qs}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+      const data = await resp.json();
+      const items = data[CC_DIR_KEY[kind]] || [];
+      all.push(...items);
+      if (items.length < 100) break;
+      offset += items.length;
+    }
+    return all;
+  };
+
+  const ensureCcDirectory = (kind) => {
+    const entry = CC_DIRECTORY[kind];
+    if (entry.status === 'done' || entry.status === 'loading') return;
+    if (!String(state.adminApiToken || '').trim()) {
+      entry.status = 'error';
+      entry.error = '尚未填入共通管理 API 權杖';
+      return;
+    }
+    entry.status = 'loading';
+    ccFetchAllPages(kind)
+      .then((items) => {
+        entry.status = 'done';
+        entry.opts = items.map((it) => ({ v: it.code, l: `${it.name || it.code} (${it.code})` }));
+        render();
+      })
+      .catch((e) => {
+        entry.status = 'error';
+        entry.error = (e && e.message) || String(e);
+        render();
+      });
+  };
+
+  const searchAddInput = (options, onPick, placeholder) => {
+    const wrap = el('div', { class: 'sda-ss-wrap' });
+    let _shown = [];
+    let _items = [];
+    let _hi = -1;
+
+    const inp = el('input', { type: 'text', class: 'sda-ss-input', autocomplete: 'off', placeholder: placeholder || '🔍 打字搜尋…' });
+    const list = el('div', { class: 'sda-ss-list' });
+
+    const refreshHi = () => {
+      _items.forEach((it, i) => it.classList.toggle('sda-ss-hi', i === _hi));
+      if (_items[_hi]) _items[_hi].scrollIntoView({ block: 'nearest' });
+    };
+
+    const pick = (o) => {
+      inp.value = '';
+      list.style.display = 'none';
+      onPick(o.v);
+    };
+
+    const buildList = (filter) => {
+      list.innerHTML = '';
+      _items = [];
+      const lf = (filter || '').trim().toLowerCase();
+      _shown = lf
+        ? options.filter((o) => o.l.toLowerCase().includes(lf) || o.v.toLowerCase().includes(lf)).slice(0, 50)
+        : options.slice(0, 50);
+      if (!_shown.length) {
+        const empty = lf ? '無符合選項' : (options.length ? `輸入以搜尋（共 ${options.length} 筆）` : '無可選項目');
+        list.appendChild(el('div', { class: 'sda-ss-empty' }, [empty]));
+        _hi = -1;
+      } else {
+        _shown.forEach((o, i) => {
+          const item = el('div', { class: 'sda-ss-item' }, [o.l]);
+          item.title = o.l;
+          item.addEventListener('mousedown', (e) => { e.preventDefault(); pick(o); });
+          item.addEventListener('mousemove', () => { if (_hi !== i) { _hi = i; refreshHi(); } });
+          list.appendChild(item);
+          _items.push(item);
+        });
+        _hi = 0;
+        refreshHi();
+      }
+      list.style.display = 'block';
+    };
+
+    inp.addEventListener('focus', () => buildList(inp.value));
+    inp.addEventListener('input', (e) => buildList(e.target.value));
+    inp.addEventListener('keydown', (e) => {
+      if (e.isComposing || e.keyCode === 229) return;
+      switch (e.key) {
+        case 'ArrowDown':
+          e.preventDefault();
+          if (_shown.length) { _hi = Math.min(_hi + 1, _shown.length - 1); refreshHi(); }
+          break;
+        case 'ArrowUp':
+          e.preventDefault();
+          if (_shown.length) { _hi = Math.max(_hi - 1, 0); refreshHi(); }
+          break;
+        case 'Enter':
+          if (_shown[_hi]) { e.preventDefault(); pick(_shown[_hi]); }
+          break;
+        case 'Escape':
+          list.style.display = 'none';
+          inp.blur();
+          break;
+      }
+    });
+    inp.addEventListener('blur', () => { setTimeout(() => { list.style.display = 'none'; }, 200); });
+
+    wrap.appendChild(inp);
+    wrap.appendChild(list);
+    return wrap;
+  };
+
+  const renderCodePicker = (kind, arr) => {
+    const wrap = el('div');
+    const dirEntry = CC_DIRECTORY[kind];
+
+    if (arr.length) {
+      const chips = el('div', { style: { display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px' } });
+      arr.forEach((code, i) => {
+        const opt = (dirEntry.opts || []).find((o) => o.v === code);
+        const chip = el('span', {
+          style: {
+            display: 'inline-flex', alignItems: 'center', gap: '6px',
+            background: '#eef1f6', border: '1px solid #d4d9e0', borderRadius: '999px',
+            padding: '3px 6px 3px 10px', fontSize: '12.5px', color: '#333',
+          },
+        }, [opt ? opt.l : `${code}（尚未載入名稱）`]);
+        const rm = el('button', { class: 'sda-btn-row', style: { borderRadius: '999px' } }, ['✕']);
+        rm.addEventListener('click', () => { arr.splice(i, 1); render(); });
+        chip.appendChild(rm);
+        chips.appendChild(chip);
+      });
+      wrap.appendChild(chips);
+    }
+
+    const token = String(state.adminApiToken || '').trim();
+    if (!token) {
+      wrap.appendChild(el('div', { style: { fontSize: '12px', color: '#b9770e', marginBottom: '4px' } }, [
+        '尚未填入第 1 區的共通管理 API 權杖，無法搜尋名單。可先在下面直接輸入完整代碼新增。'
+      ]));
+      const manualInp = el('input', { type: 'text', placeholder: `直接輸入完整${CC_KIND_LABEL[kind]}代碼，按 Enter 新增` });
+      manualInp.style.width = '100%';
+      manualInp.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        const v = manualInp.value.trim();
+        if (v && !arr.includes(v)) { arr.push(v); manualInp.value = ''; render(); }
+      });
+      wrap.appendChild(manualInp);
+      return wrap;
+    }
+
+    if (dirEntry.status === 'idle') ensureCcDirectory(kind);
+    if (dirEntry.status === 'loading') {
+      wrap.appendChild(el('div', { style: { fontSize: '12px', color: '#6b7480' } }, [`${CC_KIND_LABEL[kind]}名單載入中…`]));
+      return wrap;
+    }
+    if (dirEntry.status === 'error') {
+      wrap.appendChild(el('div', { class: 'sda-error' }, [`${CC_KIND_LABEL[kind]}名單載入失敗：${dirEntry.error}`]));
+      return wrap;
+    }
+
+    const available = dirEntry.opts.filter((o) => !arr.includes(o.v));
+    wrap.appendChild(searchAddInput(available, (code) => { arr.push(code); render(); },
+      `🔍 打一兩個字搜尋${CC_KIND_LABEL[kind]}姓名／代碼…（共 ${dirEntry.opts.length} 筆）`));
+    return wrap;
+  };
+
+  const renderCreatorCheckSection = () => {
+    const c = state.creatorCheck;
+    const sec = el('section', { class: 'sda-section' });
+    sec.appendChild(el('h3', { class: 'sda-section-title' }, ['5. 建立人狀態檢查（一覽表按鈕）']));
+    sec.appendChild(el('p', { class: 'sda-section-help' }, [
+      '在本 App 的一覽表加一顆按鈕。按下後會掃描「目前篩選條件下」的記錄，'
+      + '用第 1 區的共通管理 API 權杖查每筆記錄「建立人」的帳號狀態，'
+      + '把停用（valid=false）／已刪除的帳號標記出來，並可就地修改或刪除這些記錄。'
+    ]));
+    if (!String(state.adminApiToken || '').trim()) {
+      sec.appendChild(el('p', { class: 'sda-error' }, [
+        '⚠ 尚未填入第 1 區的「共通管理 API 權杖」，啟用後按鈕會出現但查不到帳號狀態。'
+      ]));
+    }
+
+    const grid = el('div', { class: 'sda-rule-grid' });
+    const addRow = (label, control) => {
+      grid.appendChild(el('div', { class: 'sda-row-label' }, [label]));
+      grid.appendChild(control);
+    };
+
+    addRow('啟用', checkbox(c.enabled, (v) => { c.enabled = v; render(); }, '在一覽表顯示按鈕'));
+    addRow('按鈕文字', textInput(c.buttonLabel, (v) => { c.buttonLabel = v; }, '建立人狀態檢查'));
+
+    const maxInput = el('input', { type: 'number', step: '50', min: '1', max: '5000', style: { width: '120px' } });
+    maxInput.value = c.maxRecords;
+    maxInput.addEventListener('input', (e) => { c.maxRecords = e.target.value === '' ? '' : Number(e.target.value); });
+    const maxWrap = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, [
+      maxInput,
+      el('span', { style: { fontSize: '12px', color: '#6b7480' } }, ['最多掃描幾筆（超過的不列入，避免一覽表篩選太寬時卡住）']),
+    ]);
+    addRow('掃描上限', maxWrap);
+
+    addRow('預設檢視', checkbox(c.onlyInvalidDefault, (v) => { c.onlyInvalidDefault = v; },
+      '打開時就先只顯示「帳號異常」的記錄（視窗內仍可切換為全部）'));
+    addRow('允許就地編輯', checkbox(c.allowEdit, (v) => { c.allowEdit = v; render(); },
+      '顯示欄位中勾了「可編輯」的才會變成輸入框'));
+    addRow('允許刪除記錄', checkbox(c.allowDelete, (v) => { c.allowDelete = v; render(); },
+      '顯示「刪除選取」鍵'));
+    if (c.allowDelete) {
+      addRow('', el('div', { class: 'sda-error' }, [
+        '⚠ 刪除是不可復原的。實際能不能刪仍由 kintone 權限決定：'
+        + '外掛會先問 kintone「操作者對這些記錄有沒有刪除權」，沒有權限的列會被跳過並列出來。'
+      ]));
+    }
+
+    const vis = c.visibility;
+    addRow('限制可使用對象', checkbox(vis.mode === 'restricted', (v) => { vis.mode = v ? 'restricted' : 'all'; render(); },
+      '只有符合下列名單的人才會看到按鈕（不勾＝所有能看到一覽表的人都能看到按鈕，與現行行為相同）'));
+
+    if (vis.mode === 'restricted') {
+      addRow('　使用者', renderCodePicker('users', vis.users));
+      addRow('　部門', renderCodePicker('organizations', vis.organizations));
+      addRow('　群組', renderCodePicker('groups', vis.groups));
+      addRow('', el('div', { style: { fontSize: '12px', color: '#6b7480' } }, [
+        '符合使用者／部門／群組任一項就能看到按鈕。三者都留空＝沒有人符合，按鈕不會顯示給任何人。'
+      ]));
+    }
+
+    sec.appendChild(grid);
+
+    sec.appendChild(el('p', { class: 'sda-section-help', style: { marginTop: '14px' } }, [
+      '【顯示欄位】決定視窗表格要顯示哪些欄位（由上而下＝由左而右）。'
+      + '「建立人」與「帳號狀態」是固定欄，不需要在這裡加。'
+      + `可就地編輯的型別：${[...CREATOR_CHECK_EDITABLE_TYPES].join('、')}（Lookup 欄位會改成搜尋關聯 App 的記錄）；`
+      + '系統欄位（記錄編號、建立人、更新時間、狀態…）與計算欄位無法寫入，附件、子表格不支援單列編輯，一律唯讀顯示。'
+    ]));
+
+    if (!c.allowEdit && c.columns.some((col) => col.editable)) {
+      sec.appendChild(el('p', { class: 'sda-section-help', style: { color: '#c0392b', fontWeight: '600' } }, [
+        '⚠ 上方「允許就地編輯」目前關閉，下列勾了「可改」的欄位不會生效，視窗會整張唯讀。要編輯請先打開該開關。'
+      ]));
+    }
+
+    const table = el('table', { class: 'sda-table' });
+    table.appendChild(el('thead', {}, [
+      el('tr', {}, [
+        el('th', {}, ['欄位']),
+        el('th', { style: { width: '110px' } }, ['可編輯']),
+        el('th', { style: { width: '110px' } }, ['排序']),
+        el('th', { style: { width: '60px' } }, ['']),
+      ])
+    ]));
+    const tbody = el('tbody');
+    c.columns.forEach((col, i) => {
+      const type = FIELD_TYPES[col.field];
+      const canEdit = !type || CREATOR_CHECK_EDITABLE_TYPES.has(type);
+      const editCell = canEdit
+        ? checkbox(col.editable, (v) => { c.columns[i].editable = v; render(); }, '可改')
+        : el('span', { style: { fontSize: '12px', color: '#9aa3ad' } }, [`唯讀（${type}）`]);
+
+      const orderCell = el('div', { style: { display: 'flex', gap: '4px' } }, [
+        el('button', {
+          class: 'sda-btn-row',
+          onclick: () => {
+            if (i === 0) return;
+            [c.columns[i - 1], c.columns[i]] = [c.columns[i], c.columns[i - 1]];
+            render();
+          },
+        }, ['↑']),
+        el('button', {
+          class: 'sda-btn-row',
+          onclick: () => {
+            if (i >= c.columns.length - 1) return;
+            [c.columns[i + 1], c.columns[i]] = [c.columns[i], c.columns[i + 1]];
+            render();
+          },
+        }, ['↓']),
+      ]);
+
+      tbody.appendChild(el('tr', {}, [
+        el('td', {}, [fieldCombo(FIELD_OPTIONS, col.field, (v) => { c.columns[i].field = v; render(); })]),
+        el('td', {}, [editCell]),
+        el('td', {}, [orderCell]),
+        el('td', {}, [el('button', {
+          class: 'sda-btn-row',
+          onclick: () => { c.columns.splice(i, 1); render(); },
+        }, ['✕'])]),
+      ]));
+    });
+    table.appendChild(tbody);
+    sec.appendChild(table);
+    sec.appendChild(el('button', {
+      class: 'sda-btn sda-btn-add',
+      onclick: () => { c.columns.push({ field: '', editable: false }); render(); },
+    }, ['+ 新增顯示欄位']));
+
+    return sec;
+  };
+
   const renderTokensSection = () => {
     const sec = el('section', { class: 'sda-section' });
     sec.appendChild(el('h3', { class: 'sda-section-title' }, ['1. API Token 設定']));
@@ -656,6 +1021,24 @@
     selfInput.style.flex = '1';
     selfRow.appendChild(selfInput);
     sec.appendChild(selfRow);
+
+    sec.appendChild(el('p', { class: 'sda-section-help' }, [
+      '【cybozu.com 共通管理 API 權杖】給「建立人狀態檢查」（第 5 區）查帳號是否已停用／已刪除用。'
+      + '在 cybozu.com 共通管理 →「外部服務連携」→「API 權杖」發行，字串長得像 cy.s.api1.xxxxx。'
+      + '權限（Scope）只需要「Read」；認證方式與 App 的 API Token 不同（走 Authorization: Bearer），'
+      + '因此要填在這一欄，不要填到上面或下面的表格。'
+    ]));
+    const adminRow = el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginBottom: '6px' } });
+    adminRow.appendChild(el('span', { style: { whiteSpace: 'nowrap', fontSize: '13px' } }, ['共通管理 API 權杖：']));
+    const adminInput = textInput(state.adminApiToken, (v) => { state.adminApiToken = v; }, 'cy.s.api1.…（留空＝不啟用建立人狀態檢查）', 'password');
+    adminInput.style.flex = '1';
+    adminRow.appendChild(adminInput);
+    const testOut = el('span', { style: { fontSize: '12px', whiteSpace: 'nowrap' } });
+    const testBtn = el('button', { class: 'sda-btn' }, ['測試連線']);
+    testBtn.addEventListener('click', () => testAdminApi(testBtn, testOut));
+    adminRow.appendChild(testBtn);
+    sec.appendChild(adminRow);
+    sec.appendChild(el('p', { class: 'sda-section-help', style: { marginBottom: '16px' } }, [testOut]));
 
     sec.appendChild(el('p', { class: 'sda-section-help' }, [
       '【跨 App Token 對應表】在「寫入其他 App」時使用。若目標 App 使用者本人有寫入權限可不填。'
@@ -1052,7 +1435,7 @@
     const close = () => document.body.removeChild(overlay);
     btnRow.appendChild(el('button', { class: 'sda-btn', style: { marginRight: '8px' }, onclick: close }, ['關閉']));
     if (onConfirm) {
-      // onConfirm 可為 async：內部要跳 SdaDialog 詢問時得等結果，才決定要不要收掉這個 modal。
+
       btnRow.appendChild(el('button', {
         class: 'sda-btn sda-btn-primary',
         onclick: async () => { if ((await onConfirm(ta.value)) !== false) close(); },
@@ -1098,15 +1481,26 @@
           return false;
         }
         const incomingStyle = (parsed && parsed.dialogStyle && typeof parsed.dialogStyle === 'object') ? parsed.dialogStyle : null;
+
+        const incomingCheck = (parsed && parsed.creatorCheck && typeof parsed.creatorCheck === 'object') ? parsed.creatorCheck : null;
         const styleNote = incomingStyle ? '\n（提醒視窗外觀也會一併套用）' : '';
+        const checkNote = incomingCheck ? '\n（建立人狀態檢查的設定也會一併套用；權杖仍需本 App 自己填）' : '';
         const agreed = await askConfirm({
           icon: 'warn', title: '確認匯入',
-          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）${styleNote}`,
+          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）${styleNote}${checkNote}`,
           confirmLabel: '確定取代', cancelLabel: '再想想',
         });
         if (!agreed) return false;
         state.rules = rules;
         if (incomingStyle) state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, incomingStyle);
+        if (incomingCheck) {
+          state.creatorCheck = Object.assign({}, DEFAULT_CREATOR_CHECK, incomingCheck);
+          if (!Array.isArray(state.creatorCheck.columns)) state.creatorCheck.columns = [];
+          state.creatorCheck.visibility = Object.assign({}, DEFAULT_CREATOR_CHECK_VISIBILITY, state.creatorCheck.visibility || {});
+          ['users', 'organizations', 'groups'].forEach((k) => {
+            if (!Array.isArray(state.creatorCheck.visibility[k])) state.creatorCheck.visibility[k] = [];
+          });
+        }
         render();
         const msg = document.getElementById('sda-msg');
         if (msg) { msg.className = ''; msg.textContent = `已匯入 ${rules.length} 條規則，確認後請按「儲存」。`; }
@@ -1162,6 +1556,29 @@
         errors.push(`${id}: 附件檔案複製 (copyAttachment) 僅能在「存檔後」觸發時機使用，請只勾選「新增存檔後」或「編輯存檔後」`);
       }
     });
+
+    const c = state.creatorCheck;
+    if (c.enabled) {
+      if (!String(state.adminApiToken || '').trim()) {
+        errors.push('建立人狀態檢查：已啟用但未填「共通管理 API 權杖」（第 1 區），按鈕會查不到帳號狀態');
+      }
+      const n = Number(c.maxRecords);
+      if (!Number.isFinite(n) || n < 1 || n > 5000) {
+        errors.push('建立人狀態檢查：掃描上限請填 1 ～ 5000 之間的數字');
+      }
+      const used = new Set();
+      (c.columns || []).forEach((col) => {
+        if (!col || !col.field) return;
+        if (used.has(col.field)) errors.push(`建立人狀態檢查：顯示欄位「${col.field}」重複`);
+        used.add(col.field);
+      });
+      if (c.visibility && c.visibility.mode === 'restricted') {
+        const { users = [], organizations = [], groups = [] } = c.visibility;
+        if (!users.length && !organizations.length && !groups.length) {
+          errors.push('建立人狀態檢查：已勾選「限制可使用對象」但使用者／部門／群組都留空，按鈕將對所有人都不顯示');
+        }
+      }
+    }
     return errors;
   };
 
@@ -1182,32 +1599,37 @@
       return;
     }
 
-    // ----- 1) 蒐集 Token：組合注入用的 header，以及回填用的 App→Token 對照 -----
     const selfToken = (state.selfAppToken || '').trim();
     const logToken = (state.logToken || '').trim();
-    const tokenMap = {};                       // { self, log, '<appId>': '...' }（加密存放，供回填）
+    const tokenMap = {};
     if (selfToken) tokenMap.self = selfToken;
     if (logToken) tokenMap.log = logToken;
     (state.tokens || []).forEach((t) => {
       if (t && t.appId && t.token) tokenMap[String(t.appId)] = String(t.token).trim();
     });
-    // 多把 Token 以逗號串接於同一個 header（kintone 支援多 Token；本外掛以 10 把以內為限）。
+
     const combined = [...new Set(Object.values(tokenMap).filter(Boolean))].join(',');
 
-    // ----- 2) 一般設定（getConfig 可讀）只保留非機密中繼資料，絕不含明文 Token -----
+    const adminToken = String(state.adminApiToken || '').trim();
+    if (adminToken) tokenMap.adminApi = adminToken;
+
     const publicState = Object.assign({}, state, {
-      selfAppToken: '',                        // 不再以明文存放
-      hasSelfToken: !!selfToken,               // 只留「有沒有設 Token」的旗標
-      logToken: '',                            // 不再以明文存放（logAppId 非機密，維持原樣）
+      selfAppToken: '',
+      hasSelfToken: !!selfToken,
+      logToken: '',
       hasLogToken: !!logToken,
+      adminApiToken: '',
+      hasAdminApiToken: !!adminToken,
+      creatorCheck: Object.assign({}, state.creatorCheck, {
+        columns: (state.creatorCheck.columns || []).filter((col) => col && col.field),
+      }),
       tokens: (state.tokens || []).map((t) => {
         const row = { appId: t.appId, appLabel: t.appLabel };
-        if (t && t.token) row.secured = true;  // 標記此 App 的 Token 已入加密儲存
+        if (t && t.token) row.secured = true;
         return row;
       }),
     });
 
-    // ----- 3) 先寫加密代理設定，成功後才寫一般設定 -----
     const jsonHeaders = combined
       ? { 'Content-Type': 'application/json', 'X-Cybozu-API-Token': combined }
       : { 'Content-Type': 'application/json' };
@@ -1217,10 +1639,12 @@
       [REST_PREFIX, 'GET',  getHeaders,  {}],
       [REST_PREFIX, 'POST', jsonHeaders, {}],
       [REST_PREFIX, 'PUT',  jsonHeaders, {}],
+
+      [USER_API_PREFIX, 'GET', adminToken ? { Authorization: `Bearer ${adminToken}` } : {}, {}],
       [TOKEN_MAP_URL, 'POST', {}, { map: JSON.stringify(tokenMap) }],
     ], () => {
       kintone.plugin.app.setConfig({ data: JSON.stringify(publicState) }, () => {
-        // 一定要等視窗關閉才跳轉，否則導頁會把訊息一起帶走、使用者根本看不到。
+
         notify({
           icon: 'success', title: '設定已儲存',
           text: 'API Token 已加密存放於 kintone 伺服器（一般使用者無法讀取）。\n重新整理 App 後生效。',

@@ -38,15 +38,6 @@
 
   Object.freeze(CONFIG);
 
-  // ---------- TOKEN MODEL ----------
-  // API Token 一律不以明文存在設定檔（getConfig 可被任何使用者讀取）。正式作法：
-  // Token 存在外掛代理設定（setProxyConfig，加密於 kintone 伺服器），執行期以
-  // kintone.plugin.app.proxy() 由伺服器端注入，瀏覽器永遠看不到 Token。
-  // 這裡只保留「非機密」中繼資料：哪些 App 有設定 Token（用來決定要不要走代理）。
-  //
-  // 舊版相容：更新程式後、管理者尚未重新儲存設定前，設定檔仍可能帶有明文 Token。
-  // 此時沿用舊的 fetch 直送路徑，確保功能不中斷；管理者一旦重新儲存，Token 就會搬進
-  // 加密代理設定，之後這條舊路徑不再被觸發（RAW_* 皆為空）。
   const LOG_APP = String(CONFIG.logAppId || '').trim();
 
   const DIALOG_STYLE = CONFIG.dialogStyle || {};
@@ -59,14 +50,12 @@
   const RAW_LOG_TOKEN = String(CONFIG.logToken || '').trim();
   if (LOG_APP && RAW_LOG_TOKEN) RAW_TOKENS[LOG_APP] = RAW_LOG_TOKEN;
 
-  // 已搬進加密代理設定的目標 App（新版設定會在每個有 Token 的列標記 secured:true）
   const SECURED_APP_IDS = new Set(
     (CONFIG.tokens || []).filter((t) => t && t.appId && t.secured).map((t) => String(t.appId))
   );
   const HAS_SECURED_SELF = CONFIG.hasSelfToken === true;
   if (LOG_APP && CONFIG.hasLogToken === true) SECURED_APP_IDS.add(LOG_APP);
 
-  // 本 App 是否有可用的補償 Token（明文舊值或加密新值皆算）— 決定是否啟用補償寫入流程
   const HAS_SELF_TOKEN = !!RAW_SELF_TOKEN || HAS_SECURED_SELF;
 
   const APP_NS = (() => {
@@ -171,16 +160,10 @@
   const toISODate = (d) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
   const toHHmm = (d) => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 
-  // 帶權限的 REST API 呼叫（跨 App 寫入 / 補償寫入 / Log 寫入）。三種路徑依序判斷：
-  //   1) 舊版明文 Token 仍在設定檔（尚未遷移）→ 沿用 fetch 直送，維持相容。
-  //   2) Token 已加密存於代理設定 → 走 kintone.plugin.app.proxy，由伺服器端注入 Token，
-  //      前端拿不到也看不到（代理設定以「網址前置比對」注入，故 /k/v1/ 底下皆涵蓋）。
-  //   3) 該 App 沒有設定 Token → 用呼叫者本身的 session（kintone.api），行為與原本一致。
   const apiWithToken = async (path, method, body, appIdForToken) => {
     const sApp = String(appIdForToken);
     const isSelf = sApp === getAppId();
 
-    // 1) 舊版明文 Token（遷移前的相容路徑；遷移後 RAW_* 皆空，不會進來）
     const rawToken = RAW_TOKENS[sApp] || (isSelf ? RAW_SELF_TOKEN : '');
     if (rawToken) {
       const url = kintone.api.url(path, true);
@@ -208,13 +191,12 @@
       }
     }
 
-    // 2) 加密代理路徑：Token 由 kintone 伺服器注入，前端完全不接觸
     const secured = SECURED_APP_IDS.has(sApp) || (isSelf && HAS_SECURED_SELF);
     if (secured) {
       let url = kintone.api.url(path, true);
       let data = body;
       if (method === 'GET' || method === 'DELETE') {
-        // 代理對 GET / DELETE 會忽略 data，參數需放在 query string
+
         const qs = new URLSearchParams();
         Object.entries(body || {}).forEach(([k, v]) => {
           if (Array.isArray(v)) v.forEach((x) => qs.append(`${k}[]`, x));
@@ -223,13 +205,12 @@
         url = `${url}?${qs}`;
         data = {};
       }
-      // proxy 回傳 [body(字串), status(數字), headers(物件)]；非 2xx 需自行判斷
+
       const [respBody, status] = await kintone.plugin.app.proxy(PLUGIN_ID, url, method, {}, data);
       if (status < 200 || status >= 300) throw new Error(`API ${path} ${status}: ${respBody}`);
       return respBody ? JSON.parse(respBody) : {};
     }
 
-    // 3) 無 Token → 用呼叫者自身 session
     return kintone.api(kintone.api.url(path, true), method, body);
   };
 
@@ -245,7 +226,6 @@
 
   let _runInfo = { matched: 0, labels: [] };
 
-  // 集中處理錯誤：設定畫面用的友善訊息 → event.error；技術細節 → _runInfo.error（供寫 Log）。
   const recordError = (event, err, ruleLabel) => {
     _runInfo.error = {
       category:   classifyError(err),
@@ -285,12 +265,12 @@
       await postLog(full);
     } catch (e) {
       console.error('[sda] writeLog 失敗（請確認 Log App ID / Token / 欄位代碼與類型是否正確），改用最小欄位重試', e);
-      // 最小保底：只寫三個必有的文字欄位，避開可能設錯的數值(LOG_APP)/USER_SELECT(LOG_USER)/分類欄位，
-      // 並把分類併入訊息，確保核心資訊不遺失。
+
+      const fullWriteErr = (e && e.message) || String(e);
       const minimal = {
         [LOG_FIELDS.event]:   text(trigger || (ev && ev.type)),
         [LOG_FIELDS.result]:  text(result),
-        [LOG_FIELDS.message]: text(`[${category}] ${message}`),
+        [LOG_FIELDS.message]: text(`[${category}] ${message}\n（完整欄位寫入失敗，已退化為最小欄位；原始錯誤：${fullWriteErr}）`),
       };
       try {
         await postLog(minimal);
@@ -307,10 +287,6 @@
         return (c === 'x' ? r : (r & 0x3 | 0x8)).toString(16);
       }));
 
-  // ===== 附件複製（copyAttachment）用：以 session 下載 binary、multipart 重新上傳 =====
-  // 說明：附件的 fileKey 是一次性下載 key，不能跨記錄寫入；要搬檔案只能「下載→重新上傳→取得新 key→寫入」。
-  //       binary/multipart 不吃外掛 proxy、加密 Token runtime 也讀不到，故此處一律走登入者 session
-  //       （呼叫者需對來源 App 有下載權、對目標 App 有上傳權——見 spec 2026-07-15-attachment-copy-design）。
   const downloadFileBlob = async (fileKey) => {
     const url = kintone.api.url('/k/v1/file.json', true) + '?fileKey=' + encodeURIComponent(fileKey);
     const resp = await fetch(url, { method: 'GET', headers: { 'X-Requested-With': 'XMLHttpRequest' }, credentials: 'include' });
@@ -327,7 +303,6 @@
     return data.fileKey;
   };
 
-  // 逐檔下載→重新上傳，回傳可寫入的新 fileKey 陣列 [{fileKey}]。單檔超過 maxFileSize 依 onError 跳過或中斷。
   const copyAttachments = async (files, maxFileSize, onError) => {
     const out = [];
     for (const f of (files || [])) {
@@ -484,7 +459,7 @@
         break;
       }
       case 'copyAttachment': {
-        // 把來源記錄某附件欄位的「檔案本身」複製成可寫入的新 fileKey 陣列。僅 *.submit.success 生效。
+
         const p = spec.valueParam || {};
         const from = p.from || {};
         const onErr = p.onError === 'block' ? 'block' : 'log';
@@ -492,7 +467,6 @@
         const mode = p.mode === 'append' ? 'append' : 'replace';
         const srcField = from.attachmentField;
 
-        // 目標既有附件（writeOther 讀 targetRecord、writeSelf 讀本記錄），供 append 保留與空來源時的 no-op。
         const existingField = ctx.isOther
           ? (ctx.targetRecord && ctx.targetRecord[spec.targetField])
           : record[spec.targetField];
@@ -509,7 +483,6 @@
           break;
         }
 
-        // 取得來源檔案清單：本記錄（this）或跨 App 以 keyExpr 查一筆。
         let srcFiles = [];
         if (!from.app || from.app === 'this') {
           const f = record[srcField];
@@ -525,10 +498,10 @@
           srcFiles = (rec0 && rec0[srcField] && Array.isArray(rec0[srcField].value)) ? rec0[srcField].value : [];
         }
 
-        if (srcFiles.length === 0) { _resolvedValue = existingVal; break; } // 來源空 → 不動目標
+        if (srcFiles.length === 0) { _resolvedValue = existingVal; break; }
 
         if (mode === 'append') {
-          // 既有下載 key 不可再寫入，保留既有檔案需重新上傳；以 檔名::大小 去重避免重跑重複附加。
+
           const sig = (x) => `${x && x.name}::${x && x.size}`;
           const existingSig = new Set(existingVal.map(sig));
           const toCopy = srcFiles.filter((x) => !existingSig.has(sig(x)));
@@ -657,7 +630,6 @@
 
   const appendTextNeedsTarget = (m) => m && m.valueSource === 'appendText';
 
-  // copyAttachment 的 append 模式需要目標既有附件，故要求 writeOther 撈整筆目標記錄（含附件欄位）。
   const copyAttachmentNeedsTarget = (m) => m && m.valueSource === 'copyAttachment' && m.valueParam && m.valueParam.mode === 'append';
 
   const ruleNeedsTargetRecord = (rule) => (rule.fieldMapping || []).some((m) => dateShiftNeedsTarget(m) || appendTextNeedsTarget(m) || copyAttachmentNeedsTarget(m));
@@ -927,8 +899,7 @@
         }
 
         const raw = await resolveValue(rule, ctx);
-        // copyAttachment 已於 valueParam.mode 內處理 replace/append，回傳的即為最終陣列，
-        // 不可再讓 writeToField 依 appendMode 二次合併（會混入不可寫入的舊下載 key）。
+
         const appendOpt = rule.valueSource === 'copyAttachment' ? false : (rule.appendMode === true);
         const ok = writeToField(ctx.record, rule.targetField, raw, { append: appendOpt });
         return;
@@ -952,8 +923,6 @@
     return v == null ? '' : String(v);
   });
 
-  // 只有「kintone 會等 handler 回傳 Promise」的時機，按取消才真的擋得住動作。
-  // *.show 畫面已渲染完、*.submit.success 記錄已存檔，兩者都攔不住，一律當純提醒（取消鍵不顯示）。
   const runDialog = async (rule, ctx) => {
     if (!window.SdaDialog) {
       console.warn('[sda][dialog] SdaDialog 未載入，規則已略過');
@@ -1080,8 +1049,6 @@
     } catch (e) {
       console.error('[sda] compensation write failed', e);
 
-      // 一律走 SdaDialog（有 SweetAlert2 就用它）。舊版在沒有 Swal 時只寫 console，
-      // 使用者完全看不到補償寫入失敗，履歷漏記卻無人察覺。
       const msg = `補償寫入失敗，請聯繫管理員手動補記錄。\n${e.message}`;
       if (window.SdaDialog) {
         window.SdaDialog.show({ icon: 'warn', title: '警告', text: msg, confirmLabel: '確定', style: DIALOG_STYLE });
@@ -1236,7 +1203,6 @@
     return event;
   };
 
-  // 待確認的存檔成功 log：submit 階段先暫存，待 *.submit.success 確認存檔後才寫。
   let _pendingSubmitLog = null;
 
   const successLogMessage = (matched, labels) => `已套用 ${matched} 條規則：${labels.join('、')}`;
@@ -1271,7 +1237,6 @@
     const errored = !!(ev && ev.error);
     if (!LOG_APP) return out;
 
-    // 使用者在提醒視窗按取消：是正常操作而非系統錯誤，分開記為「取消」，不污染錯誤統計。
     if (errored && _runInfo.cancelled) {
       const c = _runInfo.cancelled;
       try {
@@ -1285,7 +1250,6 @@
       return out;
     }
 
-    // 失敗：規則出錯擋下動作（含丟例外）。proceed 與 submit 皆於此即時記錄。
     if (errored && (_runInfo.matched > 0 || thrown)) {
       const info = _runInfo.error;
       try {
@@ -1300,9 +1264,6 @@
       return out;
     }
 
-    // 成功且有命中規則：
-    //   proceed → 樂觀記錄（kintone 無 process.proceed.success 事件可掛）。
-    //   submit  → 暫存，待 *.submit.success 確認存檔成功後再寫（見 flushSubmitLog）。
     if (!errored && _runInfo.matched > 0) {
       switch (trigger) {
         case 'process.proceed':
@@ -1338,33 +1299,16 @@
     }
   };
 
-  // ===== 對外暴露：以 REST API 推進狀態時，補觸發 process.proceed 規則 =====
-  // 背景：App 自訂 JS 用 /k/v1/record/status 推進流程時，kintone 不會送出 process.proceed
-  //       事件，本外掛掛在 process.proceed 的規則（含簽核履歷 appendSubtable）因此不會執行。
-  //       呼叫此函式即可用「同一份規則」補建並寫入該筆 row，避免 App 端重複實作建 row 邏輯。
-  //
-  // 用法（建議在「API 推進成功之後」呼叫；nextStatus 省略時自動讀取記錄當下的狀態）：
-  //   await window.NXSdaProceed.run({
-  //     recordId: '123',
-  //     action:   '廠商代號登錄完成',                 // 對應 kintone 流程動作名稱
-  //     fromStatus: '總務部會計課經辦登錄廠商代號',     // 推進前狀態（供規則 fromStatus 比對）
-  //     // toStatus: '流程結束',                       // 可省略；省略時取記錄當下 狀態 值
-  //   });
-  //
-  // 回傳：{ matched: number, written: boolean }
-  // 注意：本表寫入會優先使用外掛設定的 selfAppToken（若有），可避開推進後使用者已無編輯權的問題。
   const runProceedRulesViaApi = async ({ recordId, action = '', fromStatus = '', toStatus = '' } = {}) => {
     if (!recordId) throw new Error('[sda] runProceedRulesViaApi: recordId 必填');
     if (!CONFIG.rules || CONFIG.rules.length === 0) return { matched: 0, written: false };
 
     const appId = getAppId();
 
-    // 1. 取最新整筆記錄（含完整子表，供 append 既有列 + 新列一起 PUT）
     const getResp = await apiWithToken('/k/v1/record.json', 'GET', { app: appId, id: recordId }, appId);
     const record = getResp.record;
     if (!record) throw new Error(`[sda] runProceedRulesViaApi: 找不到記錄 ${recordId}`);
 
-    // 2. 組合擬真 process.proceed 事件（讓 resolveValue 的 actionName/currentStatus/nextStatus 正確）
     const resolvedNext = toStatus || (record['狀態'] && record['狀態'].value) ||
       (record.$status && record.$status.value) || '';
     const event = {
@@ -1375,7 +1319,6 @@
       nextStatus: { value: resolvedNext },
     };
 
-    // 3. 用既有比對邏輯找出命中的 process.proceed 規則
     const matched = (CONFIG.rules || []).filter((r) =>
       r.enabled !== false && triggerMatches(r, 'process.proceed') && statusMatches(r, event, record, 'process.proceed')
     );
@@ -1388,16 +1331,14 @@
     const selfRules = matched.filter((r) => r.action !== 'writeOther');
     const otherRules = matched.filter((r) => r.action === 'writeOther');
 
-    // 4. 跑本表規則（appendSubtable 會把新列 push 進 record[targetField].value）
     const touchedFields = [];
     for (const rule of selfRules) {
-      // 狀態已由 API 推進完畢，此路徑的提醒視窗一律無法中止，故強制 noBlock。
+
       if (rule.action === 'dialog') { await runDialog(rule, { ...ctx, noBlock: true }); continue; }
       await runWriteSelf(rule, ctx);
       if (rule.targetField) touchedFields.push(rule.targetField);
     }
 
-    // 5. 把被改動的本表欄位（含 append 後的完整子表）PUT 回去
     let written = false;
     const uniqueFields = [...new Set(touchedFields)];
     if (uniqueFields.length > 0) {
@@ -1406,7 +1347,6 @@
       written = true;
     }
 
-    // 6. 跨 App 規則（如有）
     for (const rule of otherRules) {
       await runWriteOther(rule, ctx);
     }
@@ -1416,27 +1356,8 @@
 
   window.NXSdaProceed = window.NXSdaProceed || { run: runProceedRulesViaApi };
 
-  // ===== 對外暴露：以外掛加密儲存的 API Token 代理呼叫 kintone REST API =====
-  // 背景：純 JavaScript 自訂（非外掛）無法使用 kintone.plugin.app.proxy，因此無法安全存取
-  //       「登入者本身無權限、需以 App Token 存取」的 App（例如分攤表 619）。本外掛已把 Token
-  //       加密存於代理設定（setProxyConfig）；此函式讓 App 端以「呼叫外掛」的方式取得資料，
-  //       Token 由 kintone 伺服器端在轉發時注入，永遠不進入瀏覽器（前端拿到的是資料，不是 Token）。
-  //
-  // 用法（回傳已解析的 JSON；失敗時 throw）：
-  //   const data = await window.NXSdaApi.call('/k/v1/record.json', 'GET', { app: 619, id: 12 }, 619);
-  //   await window.NXSdaApi.call('/k/v1/record.json', 'PUT', { app: 619, id: 12, record: {...} }, 619);
-  //
-  // appIdForToken：決定用哪個 App 的 Token（需先在設定畫面登錄該 App 的 Token）。
-  //   未登錄 Token 的 App 會自動退回登入者 session（等同直接 kintone.api）。
-  //   安全提醒：此 helper 的可及範圍 = 外掛已登錄 Token 的所有 App，請只登錄前端真正需要的 App。
   window.NXSdaApi = window.NXSdaApi || { call: (path, method, body, appIdForToken) => apiWithToken(path, method, body, appIdForToken) };
 
-  // ===== submit.success 觸發：存檔完成後再跑規則（本表 / 跨 App）=====
-  // 背景：create.submit / edit.submit 在「存檔前」執行，新增時記錄還沒有 $id，無法把「這筆新記錄的編號」
-  //       回寫到來源單據。submit.success 在「存檔後」執行，此時 event.recordId 已存在，適合做這種回寫。
-  //       本函式比照 runProceedRulesViaApi：以 API 重取整筆記錄（含 $id / 完整子表 / 附件），跑命中的規則，
-  //       本表變更以 API PUT 落地（success 階段 event.record 已無法直接改存），跨 App 走 runWriteOther。
-  // 防禦：整段包在 try/catch，任何錯誤只記 console，絕不影響已完成的存檔（success 事件不應中斷）。
   const runSuccessRules = async (trigger, ev) => {
     try {
       if (!CONFIG.rules || CONFIG.rules.length === 0) return;
@@ -1480,6 +1401,928 @@
     }
   };
 
+  const CREATOR_CHECK = Object.assign({
+    enabled: false,
+    buttonLabel: '建立人狀態檢查',
+    columns: [],
+    allowEdit: true,
+    allowDelete: false,
+    maxRecords: 500,
+    onlyInvalidDefault: false,
+    visibility: { mode: 'all', users: [], organizations: [], groups: [] },
+  }, CONFIG.creatorCheck || {});
+  CREATOR_CHECK.visibility = Object.assign(
+    { mode: 'all', users: [], organizations: [], groups: [] },
+    CREATOR_CHECK.visibility || {}
+  );
+
+  const HAS_ADMIN_API = CONFIG.hasAdminApiToken === true;
+
+  const CC_EDITABLE_TYPES = new Set([
+    'SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT', 'NUMBER', 'LINK',
+    'DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'MULTI_SELECT',
+    'DATE', 'TIME', 'DATETIME',
+    'USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT',
+  ]);
+
+  const CC_DIR_KINDS = {
+    USER_SELECT:         { path: 'users.json',         key: 'users' },
+    ORGANIZATION_SELECT: { path: 'organizations.json', key: 'organizations' },
+    GROUP_SELECT:        { path: 'groups.json',        key: 'groups' },
+  };
+
+  const CC_LIKE_TYPES = new Set(['', 'SINGLE_LINE_TEXT', 'LINK', 'MULTI_LINE_TEXT', 'RICH_TEXT']);
+
+  const USER_API_BASE = `${location.origin}/v1/`;
+
+  const CC_CREATOR_FALLBACK_CODES = ['建立人', '作成者', 'Created_by'];
+
+  const userApiGet = async (path, params) => {
+    const qs = new URLSearchParams();
+    Object.entries(params || {}).forEach(([k, v]) => {
+      if (Array.isArray(v)) v.forEach((x) => qs.append(`${k}[]`, x));
+      else if (v !== undefined && v !== null && v !== '') qs.append(k, v);
+    });
+    const q = qs.toString();
+    const url = USER_API_BASE + String(path).replace(/^\//, '') + (q ? `?${q}` : '');
+    const [body, status] = await kintone.plugin.app.proxy(PLUGIN_ID, url, 'GET', {}, {});
+    if (status < 200 || status >= 300) throw new Error(`User API ${path} ${status}: ${body}`);
+    return body ? JSON.parse(body) : {};
+  };
+
+  window.NXSdaUserApi = window.NXSdaUserApi || { get: userApiGet };
+
+  const ccQueryCondition = () => {
+    try { if (APP_NS && APP_NS.getQueryCondition) return APP_NS.getQueryCondition() || ''; } catch (e) {  }
+    try { if (MOBILE_NS && MOBILE_NS.getQueryCondition) return MOBILE_NS.getQueryCondition() || ''; } catch (e) {  }
+    return '';
+  };
+
+  const ccFetchRecords = async (fields, limit) => {
+    const appId = getAppId();
+    const cond = ccQueryCondition();
+    const out = [];
+    let offset = 0;
+    while (out.length < limit) {
+      const size = Math.min(500, limit - out.length);
+      const query = `${cond ? `${cond} ` : ''}limit ${size} offset ${offset}`;
+      const resp = await kintone.api(kintone.api.url('/k/v1/records.json', true), 'GET',
+        { app: appId, query, fields });
+      const recs = (resp && resp.records) || [];
+      out.push(...recs);
+      if (recs.length < size) break;
+      offset += recs.length;
+    }
+    return out;
+  };
+
+  const chunk = (arr, n) => {
+    const out = [];
+    for (let i = 0; i < arr.length; i += n) out.push(arr.slice(i, i + n));
+    return out;
+  };
+
+  const ccEvaluateRights = async (ids) => {
+    const map = {};
+    const appId = getAppId();
+    for (const part of chunk(ids, 100)) {
+      try {
+        const resp = await kintone.api(kintone.api.url('/k/v1/records/acl/evaluate.json', true), 'GET',
+          { app: appId, ids: part });
+        (resp.rights || []).forEach((r) => {
+          map[String(r.id)] = {
+            editable: !!(r.record && r.record.editable),
+            deletable: !!(r.record && r.record.deletable),
+          };
+        });
+      } catch (e) {
+        console.warn('[sda][creatorCheck] acl/evaluate 失敗，該批視為可編輯可刪除（實際仍由 kintone 擋）', e);
+        part.forEach((id) => { map[String(id)] = { editable: true, deletable: true }; });
+      }
+    }
+    return map;
+  };
+
+  const ccFetchUsersByCodes = async (codes) => {
+    const map = {};
+    for (const part of chunk(codes, 100)) {
+      const resp = await userApiGet('users.json', { codes: part, size: 100 });
+      (resp.users || []).forEach((u) => { map[String(u.code)] = u; });
+    }
+    return map;
+  };
+
+  const ccFetchUsersAll = async () => {
+    const map = {};
+    for (let page = 0; page < 50; page++) {
+      const resp = await userApiGet('users.json', { size: 100, offset: page * 100 });
+      const users = resp.users || [];
+      users.forEach((u) => { map[String(u.code)] = u; });
+      if (users.length < 100) break;
+    }
+    return map;
+  };
+
+  const ccFetchUsers = async (codes) => {
+    try { return await ccFetchUsersByCodes(codes); }
+    catch (e) {
+      console.warn('[sda][creatorCheck] codes 查詢失敗，改以分頁列舉全部使用者', e);
+      return ccFetchUsersAll();
+    }
+  };
+
+  const CC_STATUS_META = {
+    ok:      { label: '正常',    cls: 'sda-panel-tag-ok' },
+    off:     { label: '已停用',  cls: 'sda-panel-tag-off' },
+    gone:    { label: '已刪除',  cls: 'sda-panel-tag-gone' },
+    unknown: { label: '查不到',  cls: 'sda-panel-tag-unknown' },
+  };
+
+  const ccDisplayValue = (field, cell) => {
+    if (!cell) return '';
+    const v = cell.value;
+    if (v == null || v === '') return '';
+    const type = cell.type || (field && field.type);
+    switch (type) {
+      case 'CREATOR': case 'MODIFIER':
+        return v.name || v.code || '';
+      case 'USER_SELECT': case 'ORGANIZATION_SELECT': case 'GROUP_SELECT':
+        return (v || []).map((x) => x.name || x.code).join('、');
+      case 'CHECK_BOX': case 'MULTI_SELECT': case 'CATEGORY':
+        return (v || []).join('、');
+      case 'FILE':
+        return (v || []).map((f) => f.name).join('、');
+      case 'SUBTABLE':
+        return `（子表格 ${(v || []).length} 列）`;
+      default:
+        return String(v);
+    }
+  };
+
+  const ccNormValue = (v) => {
+    if (Array.isArray(v)) {
+      return JSON.stringify(v.map((x) => (x && typeof x === 'object' ? String(x.code) : String(x))).sort());
+    }
+    return v == null ? '' : String(v);
+  };
+
+  const ccFilterOptions = (opts, kw) => {
+    const k = String(kw || '').trim().toLowerCase();
+    if (!k) return opts;
+    return opts.filter((o) => `${o.label} ${o.v} ${o.sub || ''}`.toLowerCase().includes(k));
+  };
+
+  const ccDirCache = {};
+  const ccDirectory = (type) => {
+    if (!ccDirCache[type]) {
+      const kind = CC_DIR_KINDS[type];
+      ccDirCache[type] = (async () => {
+        const out = [];
+        for (let page = 0; page < 50; page++) {
+          const resp = await userApiGet(kind.path, { size: 100, offset: page * 100 });
+          const list = resp[kind.key] || [];
+          list.forEach((x) => {
+            if (x.valid === false || x.valid === 'false') return;
+            out.push({ v: String(x.code), label: x.name || String(x.code), sub: String(x.code) });
+          });
+          if (list.length < 100) break;
+        }
+        return out;
+      })().catch((e) => { delete ccDirCache[type]; throw e; });
+    }
+    return ccDirCache[type];
+  };
+
+  const ccLookupSearch = (lookup) => {
+    const app = lookup.relatedApp && lookup.relatedApp.app;
+    const keyField = lookup.relatedKeyField;
+    const pickerFields = (lookup.lookupPickerFields || []).filter((f) => f !== keyField).slice(0, 3);
+    let keyTypeP = null;
+    return async (kw) => {
+      if (!keyTypeP) {
+        keyTypeP = kintone.api(kintone.api.url('/k/v1/app/form/fields.json', true), 'GET', { app })
+          .then((r) => ((r.properties || {})[keyField] || {}).type || '')
+          .catch(() => '');
+      }
+      const keyType = await keyTypeP;
+      const conds = [];
+      if (lookup.filterCond) conds.push(`(${lookup.filterCond})`);
+      const k = String(kw || '').trim();
+      if (k) {
+        const esc = k.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+        if (CC_LIKE_TYPES.has(keyType)) conds.push(`${keyField} like "${esc}"`);
+        else if (/^-?\d+(\.\d+)?$/.test(k)) conds.push(`${keyField} = "${esc}"`);
+        else return [];
+      }
+      const query = `${conds.join(' and ')}${lookup.sort ? ` order by ${lookup.sort}` : ''} limit 30`.trim();
+      const resp = await kintone.api(kintone.api.url('/k/v1/records.json', true), 'GET',
+        { app, query, fields: [keyField, ...pickerFields] });
+      return ((resp && resp.records) || [])
+        .map((r) => ({
+          v: r[keyField] && r[keyField].value != null ? String(r[keyField].value) : '',
+          label: r[keyField] && r[keyField].value != null ? String(r[keyField].value) : '',
+          sub: pickerFields.map((f) => ccDisplayValue(null, r[f])).filter(Boolean).join('｜'),
+        }))
+        .filter((o) => o.v !== '');
+    };
+  };
+
+  const ccPicker = ({ multi, clearable, initial, search, allowFree, placeholder, emptyHint, onChange }) => {
+    let selected = initial.slice();
+    let items = [];
+    let active = -1;
+    let seq = 0;
+    let timer = null;
+
+    const box = document.createElement('div');
+    box.className = 'sda-pick';
+    const chips = document.createElement('span');
+    chips.style.display = 'contents';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.className = 'sda-pick-input';
+    box.appendChild(chips);
+    box.appendChild(input);
+
+    const menu = document.createElement('div');
+    menu.className = 'sda-pick-menu';
+
+    const emit = () => onChange(selected.map((s) => s.v));
+
+    const renderChips = () => {
+      chips.textContent = '';
+      selected.forEach((s, i) => {
+        const chip = document.createElement('span');
+        chip.className = 'sda-pick-chip';
+        chip.title = s.sub ? `${s.label}（${s.sub}）` : s.label;
+        chip.appendChild(document.createTextNode(s.label));
+        if (multi || clearable) {
+          const x = document.createElement('button');
+          x.type = 'button';
+          x.className = 'sda-pick-x';
+          x.textContent = '×';
+          x.addEventListener('click', () => { selected.splice(i, 1); renderChips(); emit(); });
+          chip.appendChild(x);
+        }
+        chips.appendChild(chip);
+      });
+      input.placeholder = (!multi && selected.length) ? '' : placeholder;
+    };
+
+    const onOuterScroll = (e) => { if (e.target !== menu) place(); };
+    function closeMenu() {
+      seq++;
+      if (menu.parentNode) menu.parentNode.removeChild(menu);
+      window.removeEventListener('scroll', onOuterScroll, true);
+      items = [];
+      active = -1;
+    }
+
+    function place() {
+      const r = input.getBoundingClientRect();
+      menu.style.left = `${Math.max(4, Math.min(r.left, window.innerWidth - 324))}px`;
+      menu.style.top = `${r.bottom + 2}px`;
+      menu.style.minWidth = `${Math.max(r.width, 220)}px`;
+    }
+
+    const note = (text) => {
+      const d = document.createElement('div');
+      d.className = 'sda-pick-empty';
+      d.textContent = text;
+      menu.appendChild(d);
+    };
+
+    const renderMenu = () => {
+      menu.textContent = '';
+      const kw = input.value.trim();
+      if (!items.length) {
+        if (allowFree && kw) note(`找不到符合項目，按 Enter 直接加入「${kw}」`);
+        else note(kw ? '找不到符合項目' : (emptyHint || '輸入關鍵字搜尋'));
+        return;
+      }
+      items.forEach((o, i) => {
+        const it = document.createElement('div');
+        it.className = `sda-pick-item${i === active ? ' is-active' : ''}`;
+        it.appendChild(document.createTextNode(o.label));
+        if (o.sub && o.sub !== o.label) {
+          const sub = document.createElement('span');
+          sub.className = 'sda-pick-sub';
+          sub.textContent = o.sub;
+          it.appendChild(sub);
+        }
+        it.addEventListener('mousedown', (e) => { e.preventDefault(); pick(o); });
+        menu.appendChild(it);
+      });
+    };
+
+    const openMenu = async () => {
+      const my = ++seq;
+      menu.textContent = '';
+      note('搜尋中…');
+      if (!menu.parentNode) {
+        document.body.appendChild(menu);
+        window.addEventListener('scroll', onOuterScroll, true);
+      }
+      place();
+      let res;
+      try { res = await search(input.value.trim()); }
+      catch (e) {
+        if (my !== seq) return;
+        menu.textContent = '';
+        note(`搜尋失敗：${(e && e.message) || String(e)}`);
+        return;
+      }
+      if (my !== seq) return;
+      const taken = new Set(selected.map((s) => s.v));
+      items = (res || []).filter((o) => !multi || !taken.has(o.v)).slice(0, 50);
+      active = items.length ? 0 : -1;
+      renderMenu();
+    };
+
+    function pick(o) {
+      if (multi) { if (!selected.some((s) => s.v === o.v)) selected.push(o); }
+      else selected = [o];
+      input.value = '';
+      renderChips();
+      emit();
+      if (multi) openMenu();
+      else { closeMenu(); input.blur(); }
+    }
+
+    box.addEventListener('mousedown', (e) => {
+      if (e.target === input || (e.target.closest && e.target.closest('.sda-pick-x'))) return;
+      e.preventDefault();
+      if (document.activeElement === input) openMenu();
+      else input.focus();
+    });
+    box.style.cursor = 'text';
+    input.addEventListener('focus', openMenu);
+    input.addEventListener('input', () => { clearTimeout(timer); timer = setTimeout(openMenu, 250); });
+    input.addEventListener('blur', () => setTimeout(closeMenu, 150));
+    input.addEventListener('keydown', (e) => {
+      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+        if (!items.length) return;
+        e.preventDefault();
+        active = (active + (e.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+        renderMenu();
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const kw = input.value.trim();
+        if (active >= 0 && items[active]) pick(items[active]);
+        else if (allowFree && kw) pick({ v: kw, label: kw });
+        return;
+      }
+      if (e.key === 'Backspace' && !input.value && multi && selected.length) {
+        selected.pop();
+        renderChips();
+        emit();
+      }
+    });
+
+    renderChips();
+    return box;
+  };
+
+  const ccToLocalDateTime = (iso) => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    if (isNaN(d.getTime())) return '';
+    return `${toISODate(d)}T${toHHmm(d)}`;
+  };
+
+  const ccMakeEditor = (field, cell, onChange) => {
+    const type = field.type;
+    const raw = cell ? cell.value : null;
+    const cur = raw != null && !Array.isArray(raw) ? String(raw) : '';
+
+    if (field.lookup && field.lookup.relatedApp) {
+      return ccPicker({
+        multi: false, clearable: true, allowFree: false,
+        initial: cur ? [{ v: cur, label: cur }] : [],
+        search: ccLookupSearch(field.lookup),
+        placeholder: '搜尋關聯 App…',
+        emptyHint: '輸入關鍵字搜尋關聯 App 的記錄（留空列出前 30 筆）',
+        onChange: (vals) => onChange(vals[0] || ''),
+      });
+    }
+
+    if (type === 'DROP_DOWN' || type === 'RADIO_BUTTON' || type === 'CHECK_BOX' || type === 'MULTI_SELECT') {
+      const opts = Object.values(field.options || {})
+        .sort((a, b) => Number(a.index) - Number(b.index))
+        .map((o) => ({ v: o.label, label: o.label }));
+      const multi = type === 'CHECK_BOX' || type === 'MULTI_SELECT';
+      const initVals = multi ? (Array.isArray(raw) ? raw : []) : (cur ? [cur] : []);
+      return ccPicker({
+        multi, clearable: type !== 'RADIO_BUTTON', allowFree: false,
+        initial: initVals.map((v) => ({ v: String(v), label: String(v) })),
+        search: async (kw) => ccFilterOptions(opts, kw),
+        placeholder: multi ? '搜尋選項加入…' : '搜尋選項…',
+        onChange: (vals) => onChange(multi ? vals : (vals[0] || '')),
+      });
+    }
+
+    if (CC_DIR_KINDS[type]) {
+      const noun = { USER_SELECT: '使用者', ORGANIZATION_SELECT: '組織', GROUP_SELECT: '群組' }[type];
+      return ccPicker({
+        multi: true, clearable: true, allowFree: !HAS_ADMIN_API,
+        initial: (Array.isArray(raw) ? raw : []).map((x) => ({ v: String(x.code), label: x.name || String(x.code), sub: String(x.code) })),
+        search: async (kw) => (HAS_ADMIN_API ? ccFilterOptions(await ccDirectory(type), kw) : []),
+        placeholder: HAS_ADMIN_API ? `搜尋${noun}姓名或代碼…` : `輸入${noun}代碼後按 Enter`,
+        emptyHint: HAS_ADMIN_API
+          ? `輸入${noun}姓名或代碼搜尋`
+          : `未設定共通管理 API 權杖，無法搜尋；請輸入完整${noun}代碼後按 Enter`,
+        onChange: (vals) => onChange(vals.map((code) => ({ code }))),
+      });
+    }
+
+    if (type === 'DATETIME') {
+      const inp = document.createElement('input');
+      inp.type = 'datetime-local';
+      inp.value = ccToLocalDateTime(cur);
+      inp.addEventListener('input', () => {
+        const d = inp.value ? new Date(inp.value) : null;
+        onChange(d && !isNaN(d.getTime()) ? d.toISOString().replace(/\.\d{3}Z$/, 'Z') : '');
+      });
+      return inp;
+    }
+
+    if (type === 'MULTI_LINE_TEXT' || type === 'RICH_TEXT') {
+      const ta = document.createElement('textarea');
+      ta.rows = 1;
+      ta.value = cur;
+      ta.addEventListener('input', () => onChange(ta.value));
+      return ta;
+    }
+
+    const inp = document.createElement('input');
+    switch (type) {
+      case 'NUMBER': inp.type = 'number'; break;
+      case 'DATE':   inp.type = 'date'; break;
+      case 'TIME':   inp.type = 'time'; break;
+      default:       inp.type = 'text';
+    }
+    inp.value = cur;
+    inp.addEventListener('input', () => onChange(inp.value));
+    return inp;
+  };
+
+  const openCreatorCheckPanel = async (btn) => {
+    const dialog = window.SdaDialog;
+    if (!dialog || !dialog.showPanel) {
+      alert('提醒視窗元件未載入，請重新整理頁面後再試。');
+      return;
+    }
+    const labelEl = btn._sdaLabelEl;
+    const originalLabel = labelEl ? labelEl.textContent : btn.textContent;
+    const setLabel = (text) => { if (labelEl) labelEl.textContent = text; else btn.textContent = text; };
+    btn.disabled = true;
+    setLabel('查詢中…');
+
+    try {
+      const appId = getAppId();
+      const props = await (async () => {
+        const resp = await kintone.api(kintone.api.url('/k/v1/app/form/fields.json', true), 'GET', { app: appId });
+        return (resp && resp.properties) || {};
+      })();
+
+      const cond = ccQueryCondition();
+      const probe = await kintone.api(kintone.api.url('/k/v1/records.json', true), 'GET',
+        { app: appId, query: `${cond ? `${cond} ` : ''}limit 1` });
+      const probeRec = ((probe && probe.records) || [])[0];
+      if (!probeRec) {
+        await dialog.show({
+          icon: 'info', title: CREATOR_CHECK.buttonLabel,
+          text: '目前的一覽表篩選條件下沒有任何記錄。', confirmLabel: '關閉', style: DIALOG_STYLE,
+        });
+        return;
+      }
+      const creatorCode = Object.keys(probeRec).find((c) => probeRec[c].type === 'CREATOR')
+        || Object.keys(props).find((c) => props[c].type === 'CREATOR')
+        || CC_CREATOR_FALLBACK_CODES.find((c) => probeRec[c] || props[c])
+        || CC_CREATOR_FALLBACK_CODES[0];
+
+      const columns = (CREATOR_CHECK.columns || [])
+        .filter((col) => col && col.field)
+        .map((col) => {
+
+          const field = props[col.field]
+            || { type: (probeRec[col.field] && probeRec[col.field].type) || 'SINGLE_LINE_TEXT', label: col.field };
+          const editable = CREATOR_CHECK.allowEdit && !!col.editable && CC_EDITABLE_TYPES.has(field.type);
+          return { code: col.field, label: field.label || col.field, field, editable };
+        });
+
+      const limit = Math.min(Math.max(Number(CREATOR_CHECK.maxRecords) || 500, 1), 5000);
+      const fields = [...new Set(['$id', '$revision', creatorCode, ...columns.map((c) => c.code)])];
+      const records = await ccFetchRecords(fields, limit);
+      if (!records.length) return;
+
+      const ids = records.map((r) => r.$id.value);
+      const codes = [...new Set(records.map((r) => (r[creatorCode] && r[creatorCode].value && r[creatorCode].value.code) || '').filter(Boolean))];
+
+      let users = {};
+      let userApiError = '';
+      if (!HAS_ADMIN_API) {
+        userApiError = '尚未在外掛設定填入「共通管理 API 權杖」，無法查詢帳號狀態。';
+      } else {
+        try { users = await ccFetchUsers(codes); }
+        catch (e) { userApiError = `帳號狀態查詢失敗：${(e && e.message) || String(e)}`; }
+      }
+
+      const rights = await ccEvaluateRights(ids);
+
+      const rows = records.map((rec) => {
+        const cr = (rec[creatorCode] && rec[creatorCode].value) || {};
+        const code = cr.code || '';
+        const u = users[code];
+        let status;
+        if (userApiError || !code) status = 'unknown';
+        else if (!u) status = 'gone';
+        else status = (u.valid === false || u.valid === 'false') ? 'off' : 'ok';
+        const right = rights[String(rec.$id.value)] || { editable: true, deletable: true };
+        return {
+          id: rec.$id.value,
+          revision: rec.$revision ? rec.$revision.value : undefined,
+          record: rec,
+          creatorCode: code,
+          creatorName: cr.name || code || '（無）',
+          status,
+          user: u || null,
+          editable: right.editable,
+          deletable: right.deletable,
+          dirty: {},
+          tr: null,
+        };
+      });
+
+      const badCount = rows.filter((r) => r.status === 'off' || r.status === 'gone').length;
+      const canDelete = CREATOR_CHECK.allowDelete && rows.some((r) => r.deletable);
+      const canEditAny = columns.some((c) => c.editable);
+
+      const wrap = document.createElement('div');
+      wrap.className = 'sda-panel';
+
+      const bar = document.createElement('div');
+      bar.className = 'sda-panel-bar';
+
+      const mkBtn = (label, cls) => {
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = `sda-panel-btn${cls ? ` ${cls}` : ''}`;
+        b.textContent = label;
+        return b;
+      };
+
+      let onlyBad = !!CREATOR_CHECK.onlyInvalidDefault && badCount > 0;
+      const filterBtn = mkBtn('', '');
+      const selInfo = document.createElement('span');
+      selInfo.style.fontSize = '12px';
+      selInfo.style.color = '#6b7480';
+      const saveBtn = mkBtn('儲存變更', 'sda-panel-btn-primary');
+      const delBtn = mkBtn('刪除選取', 'sda-panel-btn-danger');
+      const msg = document.createElement('span');
+      msg.className = 'sda-panel-msg';
+
+      bar.appendChild(filterBtn);
+      bar.appendChild(selInfo);
+      bar.appendChild(msg);
+      const spacer = document.createElement('span');
+      spacer.className = 'sda-panel-spacer';
+      bar.appendChild(spacer);
+      if (canEditAny) bar.appendChild(saveBtn);
+      if (canDelete) bar.appendChild(delBtn);
+      wrap.appendChild(bar);
+
+      const scroll = document.createElement('div');
+      scroll.className = 'sda-panel-scroll';
+      const table = document.createElement('table');
+      table.className = 'sda-panel-table';
+
+      const thead = document.createElement('thead');
+      const htr = document.createElement('tr');
+      const thAll = document.createElement('th');
+      const allCb = document.createElement('input');
+      allCb.type = 'checkbox';
+      allCb.title = '全選 / 全不選（只影響目前顯示的列）';
+      thAll.appendChild(allCb);
+      htr.appendChild(thAll);
+      ['記錄編號', '建立人', '帳號狀態', ...columns.map((c) => c.label)].forEach((label) => {
+        const th = document.createElement('th');
+        th.textContent = label;
+        htr.appendChild(th);
+      });
+      thead.appendChild(htr);
+      table.appendChild(thead);
+
+      const tbody = document.createElement('tbody');
+      const refreshCounters = () => {
+        const sel = rows.filter((r) => r.cb && r.cb.checked).length;
+        const dirty = rows.filter((r) => Object.keys(r.dirty).length > 0).length;
+        selInfo.textContent = `共 ${rows.length} 筆，異常 ${badCount} 筆｜已選 ${sel} 筆｜待儲存 ${dirty} 筆`;
+        saveBtn.disabled = dirty === 0;
+        delBtn.disabled = sel === 0;
+      };
+
+      rows.forEach((row) => {
+        const tr = document.createElement('tr');
+        row.tr = tr;
+        if (row.status === 'off' || row.status === 'gone') tr.classList.add('sda-panel-bad');
+
+        const tdCb = document.createElement('td');
+        const cb = document.createElement('input');
+        cb.type = 'checkbox';
+        cb.addEventListener('change', refreshCounters);
+        row.cb = cb;
+        tdCb.appendChild(cb);
+        tr.appendChild(tdCb);
+
+        const tdId = document.createElement('td');
+        const idLink = document.createElement('a');
+        idLink.href = `${location.origin}/k/${appId}/show#record=${row.id}`;
+        idLink.target = '_blank';
+        idLink.rel = 'noopener';
+        idLink.className = 'sda-panel-link';
+        idLink.textContent = String(row.id);
+        tdId.appendChild(idLink);
+        tr.appendChild(tdId);
+
+        const tdCreator = document.createElement('td');
+        tdCreator.textContent = row.creatorCode ? `${row.creatorName}（${row.creatorCode}）` : row.creatorName;
+        tr.appendChild(tdCreator);
+
+        const tdStatus = document.createElement('td');
+        const meta = CC_STATUS_META[row.status];
+        const tag = document.createElement('span');
+        tag.className = `sda-panel-tag ${meta.cls}`;
+        tag.textContent = meta.label;
+        tdStatus.appendChild(tag);
+        if (!row.editable || (CREATOR_CHECK.allowDelete && !row.deletable)) {
+          const lock = document.createElement('span');
+          lock.style.marginLeft = '6px';
+          lock.style.fontSize = '12px';
+          lock.style.color = '#9aa3ad';
+          lock.textContent = row.editable ? '🔒不可刪' : '🔒唯讀';
+          tdStatus.appendChild(lock);
+        }
+        tr.appendChild(tdStatus);
+
+        columns.forEach((col) => {
+          const td = document.createElement('td');
+          const cell = row.record[col.code];
+          if (col.editable && row.editable) {
+            td.appendChild(ccMakeEditor(col.field, cell, (v) => {
+              if (ccNormValue(v) === ccNormValue(cell && cell.value)) delete row.dirty[col.code];
+              else row.dirty[col.code] = v;
+              tr.classList.toggle('sda-panel-dirty', Object.keys(row.dirty).length > 0);
+              refreshCounters();
+            }));
+          } else {
+            td.textContent = ccDisplayValue(col.field, cell);
+          }
+          tr.appendChild(td);
+        });
+
+        tbody.appendChild(tr);
+      });
+      table.appendChild(tbody);
+      scroll.appendChild(table);
+      wrap.appendChild(scroll);
+
+      const note = document.createElement('div');
+      note.className = 'sda-panel-note';
+      const notes = [
+        `掃描範圍：一覽表目前的篩選條件，上限 ${limit} 筆${records.length >= limit ? '（已達上限，可能還有未列出的記錄）' : ''}。`,
+        '「已停用」＝共通管理裡帳號 valid=false；「已刪除」＝共通管理已查不到這個帳號。',
+      ];
+      if (userApiError) notes.push(`⚠ ${userApiError}`);
+      if (!canEditAny && CREATOR_CHECK.allowEdit) notes.push('※ 尚未在外掛設定把任何顯示欄位設為「可編輯」，因此本表為唯讀。');
+      if (!CREATOR_CHECK.allowEdit && (CREATOR_CHECK.columns || []).some((col) => col && col.editable)) {
+        notes.push('※ 外掛設定的「允許就地編輯」總開關未開啟，勾了「可改」的欄位不會生效，因此本表為唯讀。');
+      }
+      note.textContent = notes.join('\n');
+      note.style.whiteSpace = 'pre-line';
+      wrap.appendChild(note);
+
+      const confirmBar = document.createElement('div');
+      confirmBar.className = 'sda-panel-confirm';
+      confirmBar.hidden = true;
+      wrap.appendChild(confirmBar);
+
+      const setMsg = (text, kind) => {
+        msg.textContent = text || '';
+        msg.className = `sda-panel-msg${kind ? ` sda-panel-msg-${kind}` : ''}`;
+      };
+
+      const applyFilter = () => {
+        rows.forEach((r) => {
+          const hide = onlyBad && r.status !== 'off' && r.status !== 'gone';
+          r.tr.hidden = hide;
+          if (hide && r.cb.checked) { r.cb.checked = false; }
+        });
+        filterBtn.textContent = onlyBad ? `顯示全部（目前只看異常 ${badCount} 筆）` : `只看異常（${badCount} 筆）`;
+        refreshCounters();
+      };
+      filterBtn.addEventListener('click', () => { onlyBad = !onlyBad; applyFilter(); });
+
+      allCb.addEventListener('change', () => {
+        rows.forEach((r) => { if (!r.tr.hidden) r.cb.checked = allCb.checked; });
+        refreshCounters();
+      });
+
+      let needsReload = false;
+
+      saveBtn.addEventListener('click', async () => {
+        const targets = rows.filter((r) => Object.keys(r.dirty).length > 0);
+        if (!targets.length) return;
+        saveBtn.disabled = true;
+        delBtn.disabled = true;
+        setMsg(`儲存中…（${targets.length} 筆）`);
+        let done = 0;
+        const failed = [];
+        for (const part of chunk(targets, 100)) {
+          const payload = part.map((r) => ({
+            id: r.id,
+            revision: r.revision,
+            record: Object.entries(r.dirty).reduce((m, [code, value]) => {
+              m[code] = { value };
+              return m;
+            }, {}),
+          }));
+          try {
+            const resp = await kintone.api(kintone.api.url('/k/v1/records.json', true), 'PUT',
+              { app: appId, records: payload });
+            (resp.records || []).forEach((res, i) => {
+              const r = part[i];
+              if (!r) return;
+              r.revision = res.revision;
+              Object.entries(r.dirty).forEach(([code, value]) => {
+                if (r.record[code]) r.record[code].value = value;
+              });
+              r.dirty = {};
+              r.tr.classList.remove('sda-panel-dirty');
+            });
+            done += part.length;
+          } catch (e) {
+            failed.push(`記錄 ${part.map((r) => r.id).join(', ')}：${(e && e.message) || String(e)}`);
+          }
+        }
+        needsReload = needsReload || done > 0;
+        refreshCounters();
+        if (failed.length) setMsg(`已儲存 ${done} 筆，失敗 ${failed.length} 批：${failed[0]}`, 'err');
+        else setMsg(`✓ 已儲存 ${done} 筆。`, 'ok');
+      });
+
+      delBtn.addEventListener('click', () => {
+        const selected = rows.filter((r) => r.cb.checked);
+        if (!selected.length) return;
+        const allowed = selected.filter((r) => r.deletable);
+        const blocked = selected.filter((r) => !r.deletable);
+
+        confirmBar.hidden = false;
+        confirmBar.innerHTML = '';
+        const text = document.createElement('span');
+        text.textContent = allowed.length
+          ? `確定刪除 ${allowed.length} 筆記錄？此動作無法復原。`
+          + (blocked.length ? `（其中 ${blocked.length} 筆沒有刪除權限，會跳過）` : '')
+          : `選取的 ${selected.length} 筆您都沒有刪除權限，無法刪除。`;
+        confirmBar.appendChild(text);
+
+        const cancel = mkBtn('取消', '');
+        cancel.addEventListener('click', () => { confirmBar.hidden = true; });
+        confirmBar.appendChild(cancel);
+
+        if (!allowed.length) return;
+        const yes = mkBtn(`確定刪除 ${allowed.length} 筆`, 'sda-panel-btn-danger');
+        yes.addEventListener('click', async () => {
+          yes.disabled = true;
+          cancel.disabled = true;
+          setMsg(`刪除中…（${allowed.length} 筆）`);
+          let done = 0;
+          const failed = [];
+          for (const part of chunk(allowed, 100)) {
+            try {
+              await kintone.api(kintone.api.url('/k/v1/records.json', true), 'DELETE',
+                { app: appId, ids: part.map((r) => r.id) });
+              part.forEach((r) => {
+                r.tr.parentNode && r.tr.parentNode.removeChild(r.tr);
+                r.cb.checked = false;
+                r.deleted = true;
+              });
+              done += part.length;
+            } catch (e) {
+              failed.push(`記錄 ${part.map((r) => r.id).join(', ')}：${(e && e.message) || String(e)}`);
+            }
+          }
+          needsReload = needsReload || done > 0;
+          confirmBar.hidden = true;
+          refreshCounters();
+          if (failed.length) setMsg(`已刪除 ${done} 筆，失敗 ${failed.length} 批：${failed[0]}`, 'err');
+          else setMsg(`✓ 已刪除 ${done} 筆。`, 'ok');
+        });
+        confirmBar.appendChild(yes);
+      });
+
+      applyFilter();
+
+      await dialog.showPanel({
+        title: `${CREATOR_CHECK.buttonLabel}（${records.length} 筆）`,
+        content: wrap,
+        closeLabel: '關閉',
+        style: DIALOG_STYLE,
+      });
+
+      if (needsReload) location.reload();
+    } catch (e) {
+      console.error('[sda][creatorCheck]', e);
+      await window.SdaDialog.show({
+        icon: 'error', title: '建立人狀態檢查失敗',
+        text: friendlyError(e, '查詢時發生錯誤'), confirmLabel: '關閉', style: DIALOG_STYLE,
+      });
+    } finally {
+      btn.disabled = false;
+      setLabel(originalLabel);
+    }
+  };
+
+  const ccCheckVisibility = async () => {
+    const vis = CREATOR_CHECK.visibility;
+    if (!vis || vis.mode !== 'restricted') return true;
+
+    const users = vis.users || [];
+    const orgs = vis.organizations || [];
+    const groups = vis.groups || [];
+    if (!users.length && !orgs.length && !groups.length) return false;
+
+    let loginUser = null;
+    try { loginUser = (typeof kintone !== 'undefined' && kintone.getLoginUser) ? kintone.getLoginUser() : null; }
+    catch (e) { loginUser = null; }
+    if (!loginUser || !loginUser.code) return true;
+
+    if (users.includes(loginUser.code)) return true;
+    if (!orgs.length && !groups.length) return false;
+    if (!HAS_ADMIN_API) {
+      console.warn('[sda][creatorCheck] 已設定部門／群組限制但未設定共通管理 API 權杖，無法驗證，按鈕不顯示');
+      return false;
+    }
+
+    try {
+      if (orgs.length) {
+        const resp = await userApiGet('user/organizations.json', { code: loginUser.code });
+        const myOrgs = (resp.organizationTitles || [])
+          .map((t) => t.organization && t.organization.code)
+          .filter(Boolean);
+        if (myOrgs.some((c) => orgs.includes(c))) return true;
+      }
+      if (groups.length) {
+        const resp = await userApiGet('user/groups.json', { code: loginUser.code });
+        const myGroups = (resp.groups || []).map((g) => g.code).filter(Boolean);
+        if (myGroups.some((c) => groups.includes(c))) return true;
+      }
+    } catch (e) {
+      console.warn('[sda][creatorCheck] 可使用對象驗證失敗，按鈕不顯示', e);
+      return false;
+    }
+    return false;
+  };
+
+  const CC_BTN_ID = 'sda-creator-check-btn';
+  const mountCreatorCheckButton = async () => {
+    if (!CREATOR_CHECK.enabled) return;
+    if (document.getElementById(CC_BTN_ID)) return;
+    let space = null;
+    try {
+      space = (APP_NS && APP_NS.getHeaderMenuSpaceElement && APP_NS.getHeaderMenuSpaceElement())
+        || (MOBILE_NS && MOBILE_NS.getHeaderSpaceElement && MOBILE_NS.getHeaderSpaceElement());
+    } catch (e) { space = null; }
+    if (!space) return;
+    if (!(await ccCheckVisibility())) return;
+    if (document.getElementById(CC_BTN_ID)) return;
+
+    const accent = (DIALOG_STYLE && DIALOG_STYLE.buttonColor) || '#7b68ee';
+    const btn = document.createElement('button');
+    btn.id = CC_BTN_ID;
+    btn.type = 'button';
+    Object.assign(btn.style, {
+      display: 'inline-flex', alignItems: 'center', gap: '6px',
+      padding: '7px 16px', fontSize: '13px', fontWeight: '600', borderRadius: '6px',
+      border: 'none', background: accent, color: '#fff',
+      cursor: 'pointer', marginLeft: '8px', boxShadow: '0 1px 3px rgba(0,0,0,.25)',
+    });
+    const icon = document.createElement('span');
+    icon.textContent = '🔍';
+    icon.style.fontSize = '13px';
+    const label = document.createElement('span');
+    label.textContent = CREATOR_CHECK.buttonLabel || '建立人狀態檢查';
+    btn.appendChild(icon);
+    btn.appendChild(label);
+    btn._sdaLabelEl = label;
+    btn.addEventListener('mouseenter', () => { btn.style.opacity = '.88'; });
+    btn.addEventListener('mouseleave', () => { btn.style.opacity = '1'; });
+    btn.addEventListener('click', () => openCreatorCheckPanel(btn));
+    space.appendChild(btn);
+  };
+
   const E = (names) => names.flatMap((n) => [`app.record.${n}`, `mobile.app.record.${n}`]);
 
   kintone.events.on(E(['create.show']),
@@ -1516,6 +2359,10 @@
 
   kintone.events.on(E(['detail.show']),
     safeHandler(handleDetailShow)
+  );
+
+  kintone.events.on(E(['index.show']),
+    safeHandler(async (ev) => { await mountCreatorCheckButton(); return ev; })
   );
 
 })();

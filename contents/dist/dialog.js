@@ -1,11 +1,6 @@
 (() => {
   'use strict';
 
-  // 共用檔：runtime（desktop.js / mobile.js）與設定畫面（config.js）都載入這一支。
-  //
-  // 兩種渲染器：頁面上有 SweetAlert2（window.Swal）就用它，沒有才用內建的原生元件。
-  // 偵測必須在 show() 當下做，不能在載入時做——外掛 JS 可能早於 App 自訂 JS 執行，
-  // 載入當下 window.Swal 還不存在，但事件觸發時它已經在了。
   const DEFAULTS = {
     fontSize: 14,
     lineHeight: 1.9,
@@ -34,8 +29,6 @@
     question: 'question',
   };
 
-  // success / error 的圖示由多個子元素組成（勾線、叉線各自有底色），只覆寫 border-color
-  // 與 color 會得到半染色的結果。這兩種一律用語意色，accent 不介入，兩種渲染器行為一致。
   const SEMANTIC_ICON_COLORS = { success: '#a5dc86', error: '#f27474' };
 
   const num = (v, fallback) => {
@@ -68,16 +61,65 @@
 
   const iconColorOf = (icon, accent) => SEMANTIC_ICON_COLORS[icon] || accent;
 
+  const PANEL_CSS = [
+    `.swal2-popup.sda-swal-panel .swal2-html-container{white-space:normal;text-align:left;overflow:visible;margin:0;}`,
+    `.swal2-popup.sda-swal-panel{padding:20px 20px 12px;}`,
+    `.sda-pnl-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,.45);display:flex;overflow:auto;padding:16px;box-sizing:border-box;z-index:100000;}`,
+    `.sda-pnl{background:#fff;border-radius:12px;margin:auto;box-sizing:border-box;padding:20px;width:min(1180px,96vw);box-shadow:0 12px 44px rgba(0,0,0,.28);font-family:${FONT_STACK};}`,
+    `.sda-pnl-title{font-size:18px;font-weight:600;color:#2c2c2a;margin:0 0 12px;}`,
+    `.sda-pnl-foot{display:flex;justify-content:flex-end;margin-top:14px;}`,
+    `.sda-panel{text-align:left;font-size:13px;color:#3c3c3a;font-family:${FONT_STACK};}`,
+    `.sda-panel-bar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:0 0 10px;}`,
+    `.sda-panel-bar .sda-panel-spacer{flex:1;}`,
+    `.sda-panel-btn{padding:6px 14px;font-size:13px;border-radius:6px;border:1px solid #c9ced4;background:#fff;color:#444;cursor:pointer;font-family:inherit;}`,
+    `.sda-panel-btn:hover:not(:disabled){background:#f4f6f8;}`,
+    `.sda-panel-btn:disabled{opacity:.45;cursor:default;}`,
+    `.sda-panel-btn-primary{background:#3498db;border-color:#3498db;color:#fff;}`,
+    `.sda-panel-btn-primary:hover:not(:disabled){background:#2e89c7;}`,
+    `.sda-panel-btn-danger{background:#e74c3c;border-color:#e74c3c;color:#fff;}`,
+    `.sda-panel-btn-danger:hover:not(:disabled){background:#d0402f;}`,
+    `.sda-panel-scroll{max-height:60vh;overflow:auto;border:1px solid #e3e7ea;border-radius:6px;}`,
+    `.sda-panel-table{border-collapse:collapse;width:100%;font-size:13px;}`,
+    `.sda-panel-table th,.sda-panel-table td{border-bottom:1px solid #eceff1;padding:6px 8px;text-align:left;vertical-align:middle;white-space:nowrap;}`,
+    `.sda-panel-table thead th{position:sticky;top:0;background:#f7f9fa;z-index:1;font-weight:600;color:#5a6470;}`,
+    `.sda-panel-table tbody tr:hover{background:#fbfcfd;}`,
+    `.sda-panel-table tr.sda-panel-bad{background:#fff6f5;}`,
+    `.sda-panel-table tr.sda-panel-bad:hover{background:#ffefed;}`,
+    `.sda-panel-table tr.sda-panel-dirty td{background:#fffbe6;}`,
+    `.sda-panel-table input[type=text],.sda-panel-table input[type=number],.sda-panel-table input[type=date],.sda-panel-table input[type=time],.sda-panel-table input[type=datetime-local],.sda-panel-table select{width:100%;min-width:90px;box-sizing:border-box;padding:3px 6px;font-size:13px;border:1px solid #cbd2d9;border-radius:4px;font-family:inherit;}`,
+    `.sda-panel-table textarea{width:100%;min-width:160px;box-sizing:border-box;padding:3px 6px;font-size:13px;border:1px solid #cbd2d9;border-radius:4px;font-family:inherit;}`,
+    `.sda-panel-link{color:#3498db;text-decoration:none;}`,
+    `.sda-panel-link:hover{text-decoration:underline;}`,
+    `.sda-pick{display:flex;flex-wrap:wrap;gap:4px;align-items:center;min-width:200px;max-width:380px;box-sizing:border-box;padding:2px 4px;border:1px solid #cbd2d9;border-radius:4px;background:#fff;white-space:normal;}`,
+    `.sda-pick:focus-within{border-color:#3498db;}`,
+    `.sda-panel-table .sda-pick input.sda-pick-input{flex:1;width:auto;min-width:90px;border:none;outline:none;padding:2px;background:transparent;}`,
+    `.sda-pick-chip{display:inline-flex;align-items:center;gap:2px;background:#eaf3fb;color:#1f5f8b;border-radius:10px;padding:1px 3px 1px 8px;font-size:12px;white-space:nowrap;}`,
+    `.sda-pick-x{border:none;background:none;cursor:pointer;color:#6b7480;padding:0 3px;font-size:13px;line-height:1;}`,
+    `.sda-pick-x:hover{color:#c0392b;}`,
+    `.sda-pick-menu{position:fixed;z-index:100100;background:#fff;border:1px solid #cbd2d9;border-radius:6px;box-shadow:0 6px 18px rgba(0,0,0,.15);max-height:260px;overflow:auto;font-size:13px;color:#3c3c3a;text-align:left;font-family:${FONT_STACK};}`,
+    `.sda-pick-item{padding:6px 10px;cursor:pointer;white-space:nowrap;}`,
+    `.sda-pick-item.is-active,.sda-pick-item:hover{background:#eaf3fb;}`,
+    `.sda-pick-sub{color:#8a939c;font-size:11px;margin-left:8px;}`,
+    `.sda-pick-empty{padding:8px 10px;color:#8a939c;white-space:normal;max-width:320px;}`,
+    `.sda-panel-tag{display:inline-block;padding:1px 7px;border-radius:10px;font-size:12px;white-space:nowrap;}`,
+    `.sda-panel-tag-ok{background:#e8f6ee;color:#1e7d4f;}`,
+    `.sda-panel-tag-off{background:#fdecea;color:#c0392b;}`,
+    `.sda-panel-tag-gone{background:#f3e8fd;color:#7d3c98;}`,
+    `.sda-panel-tag-unknown{background:#eef1f3;color:#6b7480;}`,
+    `.sda-panel-note{font-size:12px;color:#6b7480;margin:8px 0 0;}`,
+    `.sda-panel-msg-ok{color:#1e7d4f;}`,
+    `.sda-panel-msg-err{color:#c0392b;}`,
+    `.sda-panel-confirm{display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:#fdecea;border:1px solid #f5b7b1;color:#922b21;padding:8px 10px;border-radius:6px;margin:10px 0 0;font-size:13px;}`,
+    `.sda-panel-confirm[hidden]{display:none;}`,
+    `@media (max-width:600px){.sda-pnl{padding:14px;}.sda-panel-scroll{max-height:64vh;}}`,
+  ];
+
   const buildCss = (style, ruleAccent, icon) => {
     const s = normalize(style);
     const accent = effectiveAccent(style, ruleAccent);
-    // accent 停在預設值＝管理者沒表達意見，此時讓 SweetAlert2 沿用它原生的圖示配色
-    // （淺橘圈線＋較深的驚嘆號），不要用單一色壓平它。
+
     const overrideSwalIcon = accent !== DEFAULTS.accent && !SEMANTIC_ICON_COLORS[icon];
 
-    // 寬度完全交給內容：width:auto、不設 max-width，盒子長到最長那一行為止。
-    // 遮罩改成可捲動 + 視窗用 margin:auto 置中——flex 的 center 對齊在內容超出容器時
-    // 會把起始邊裁掉且捲不到，margin:auto 沒有這個問題。
     const builtIn = [
       `.sda-dlg-overlay{position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,${s.overlay});display:flex;overflow:auto;padding:16px;box-sizing:border-box;z-index:100000;}`,
       `.sda-dlg{background:#fff;border-radius:${s.radius}px;width:auto;min-width:280px;margin:auto;box-sizing:border-box;padding:26px 24px 20px;text-align:center;box-shadow:0 12px 44px rgba(0,0,0,.28);font-family:${FONT_STACK};animation:sda-dlg-in .25s ease-out;}`,
@@ -101,11 +143,10 @@
       `.sda-dlg-cancel:hover{background:#f4f6f8;}`,
     ];
 
-    // 全部以 .sda-swal / .sda-swal-container 收斂，避免動到 App 自己呼叫的 SweetAlert2。
     const swal = [
-      // z-index 必須壓過設定畫面自製的 openTextModal 覆蓋層（9999），否則會被蓋住。
+
       `.swal2-container.sda-swal-container{background:rgba(0,0,0,${s.overlay});z-index:100000;overflow:auto;}`,
-      // SweetAlert2 的 .swal2-popup 自帶 max-width:100%，不解掉就長不出容器寬度。
+
       `.swal2-popup.sda-swal{border-radius:${s.radius}px;font-family:${FONT_STACK};min-width:280px;max-width:none;}`,
       `.swal2-popup.sda-swal .swal2-title{font-size:${s.titleSize}px;}`,
       `.swal2-popup.sda-swal .swal2-html-container{white-space:pre;text-align:${s.align};font-size:${s.fontSize}px;line-height:${s.lineHeight};}`,
@@ -115,12 +156,11 @@
       swal.push(`.swal2-popup.sda-swal .swal2-icon{border-color:${accent};color:${accent};}`);
     }
 
-    // 窄螢幕退路：不換行在手機上會逼使用者左右滑才讀得完提醒，600px 以下恢復自動換行。
     const narrow = [
       `@media (max-width:600px){.sda-dlg-text,.swal2-popup.sda-swal .swal2-html-container{white-space:pre-wrap;word-break:break-word;}.sda-dlg{max-width:92vw;}.swal2-popup.sda-swal{max-width:92vw;}}`,
     ];
 
-    return builtIn.concat(swal).concat(narrow).concat([s.customCss]).join('\n');
+    return builtIn.concat(swal).concat(PANEL_CSS).concat(narrow).concat([s.customCss]).join('\n');
   };
 
   const ensureStyleEl = (css) => {
@@ -140,7 +180,7 @@
       showCancelButton: hasCancel,
       reverseButtons: true,
       allowOutsideClick: false,
-      // 'auto' 讓 SweetAlert2 也縮到剛好包住內容；上限由 .sda-swal 的 max-width 控制。
+
       width: 'auto',
       customClass: { container: 'sda-swal-container', popup: 'sda-swal' },
     };
@@ -149,12 +189,9 @@
     if (hasCancel) cfg.cancelButtonText = String(o.cancelLabel);
     if (icon !== 'none' && SWAL_ICONS[icon]) cfg.icon = SWAL_ICONS[icon];
 
-    // 沒有取消鍵時一律回 true：Esc 關掉純提醒不該被當成中止（與內建渲染器一致）。
     return window.Swal.fire(cfg).then((r) => (hasCancel ? !!(r && r.isConfirmed) : true));
   };
 
-  // 內建元件的圖示改用 SVG：圓環與勾／叉都靠 stroke-dashoffset 畫出來，
-  // 才有 SweetAlert2 那種「打勾動畫」。warn / info / question 仍用文字字元，只有圓環會動。
   const SVG_NS = 'http://www.w3.org/2000/svg';
   const svgEl = (tag, attrs) => {
     const e = document.createElementNS(SVG_NS, tag);
@@ -208,7 +245,6 @@
       box.appendChild(t);
     }
 
-    // textContent + white-space:pre-wrap：換行與縮排原樣保留，且設定內容永遠不會被當成標記解析。
     const body = document.createElement('div');
     body.className = 'sda-dlg-text';
     body.textContent = String(o.text == null ? '' : o.text);
@@ -244,7 +280,6 @@
       resolve(v);
     };
 
-    // 沒有取消鍵時 Esc 等同確定，避免使用者以為關掉視窗就能繞過提醒卻其實中斷了流程。
     function onKey(e) {
       switch (e.key) {
         case 'Enter':  e.preventDefault(); finish(true); break;
@@ -279,5 +314,77 @@
     return showBuiltIn(o, s, icon, hasCancel, accent);
   };
 
-  window.SdaDialog = window.SdaDialog || { show, buildCss, hasSwal, DEFAULT_STYLE: DEFAULTS };
+  const showPanelBuiltIn = (o, content, closeLabel) => new Promise((resolve) => {
+    const overlay = document.createElement('div');
+    overlay.className = 'sda-pnl-overlay';
+    const box = document.createElement('div');
+    box.className = 'sda-pnl';
+    box.setAttribute('role', 'dialog');
+
+    const title = String(o.title == null ? '' : o.title);
+    if (title) {
+      const t = document.createElement('div');
+      t.className = 'sda-pnl-title';
+      t.textContent = title;
+      box.appendChild(t);
+    }
+    if (content) box.appendChild(content);
+
+    const foot = document.createElement('div');
+    foot.className = 'sda-pnl-foot';
+    const closeBtn = document.createElement('button');
+    closeBtn.type = 'button';
+    closeBtn.className = 'sda-panel-btn';
+    closeBtn.textContent = closeLabel;
+    foot.appendChild(closeBtn);
+    box.appendChild(foot);
+    overlay.appendChild(box);
+
+    let settled = false;
+    const finish = () => {
+      if (settled) return;
+      settled = true;
+      document.removeEventListener('keydown', onKey, true);
+      if (overlay.parentNode) overlay.parentNode.removeChild(overlay);
+      resolve(true);
+    };
+    function onKey(e) {
+      if (e.key === 'Escape') { e.preventDefault(); finish(); }
+    }
+    closeBtn.addEventListener('click', finish);
+    document.addEventListener('keydown', onKey, true);
+
+    document.body.appendChild(overlay);
+    if (typeof o.onReady === 'function') o.onReady({ close: finish });
+  });
+
+  const showPanel = (opts) => {
+    const o = opts || {};
+    const icon = o.icon || 'none';
+    const closeLabel = String(o.closeLabel || '關閉');
+    const content = o.content || null;
+
+    ensureStyleEl(buildCss(o.style, o.accent, icon));
+
+    if (hasSwal()) {
+      try {
+        return window.Swal.fire({
+          title: String(o.title == null ? '' : o.title),
+          html: content,
+          width: o.width || 'min(1180px, 96vw)',
+          confirmButtonText: closeLabel,
+          allowOutsideClick: false,
+          customClass: { container: 'sda-swal-container', popup: 'sda-swal sda-swal-panel' },
+          didOpen: () => {
+            if (typeof o.onReady === 'function') o.onReady({ close: () => window.Swal.close() });
+          },
+        }).then(() => true);
+      } catch (e) {
+        console.warn('[sda][dialog] SweetAlert2 面板呼叫失敗，改用內建元件', e);
+      }
+    }
+    return showPanelBuiltIn(o, content, closeLabel);
+  };
+
+  window.SdaDialog = window.SdaDialog || { show, showPanel, buildCss, hasSwal, DEFAULT_STYLE: DEFAULTS };
 })();
