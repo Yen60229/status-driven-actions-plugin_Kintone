@@ -1551,8 +1551,12 @@
     switch (type) {
       case 'CREATOR': case 'MODIFIER':
         return v.name || v.code || '';
-      case 'USER_SELECT': case 'ORGANIZATION_SELECT': case 'GROUP_SELECT':
+      case 'USER_SELECT': case 'ORGANIZATION_SELECT': case 'GROUP_SELECT': case 'STATUS_ASSIGNEE':
         return (v || []).map((x) => x.name || x.code).join('、');
+      case 'CREATED_TIME': case 'UPDATED_TIME': {
+        const d = new Date(v);
+        return isNaN(d.getTime()) ? String(v) : `${toISODate(d)} ${toHHmm(d)}`;
+      }
       case 'CHECK_BOX': case 'MULTI_SELECT': case 'CATEGORY':
         return (v || []).join('、');
       case 'FILE':

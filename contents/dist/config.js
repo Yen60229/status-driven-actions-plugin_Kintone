@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.17.2';
+  const UI_VERSION = '1.18.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -441,6 +441,37 @@
       })
       .catch(() => []);
   };
+
+  const CC_SYSTEM_TYPE_ORDER = [
+    'RECORD_NUMBER', 'STATUS', 'STATUS_ASSIGNEE', 'CATEGORY',
+    'CREATOR', 'CREATED_TIME', 'MODIFIER', 'UPDATED_TIME',
+  ];
+  const CC_NON_COLUMN_TYPES = new Set(['LABEL', 'SPACER', 'HR', 'GROUP', 'REFERENCE_TABLE']);
+  let CC_FIELD_OPTIONS = null;
+  const loadCcFields = () =>
+    kintone.api(kintone.api.url('/k/v1/preview/app/form/fields.json', true), 'GET', { app: APP_ID })
+      .then((resp) => {
+        const props = (resp && resp.properties) || {};
+        const usable = Object.keys(props)
+          .map((code) => props[code])
+          .filter((f) => f && f.code && !CC_NON_COLUMN_TYPES.has(f.type) && f.enabled !== false);
+        const layoutOrder = FIELD_OPTIONS.map((o) => o.v).filter(Boolean);
+        const rank = (f) => {
+          const s = CC_SYSTEM_TYPE_ORDER.indexOf(f.type);
+          if (s >= 0) return s;
+          const l = layoutOrder.indexOf(f.code);
+          return CC_SYSTEM_TYPE_ORDER.length + (l >= 0 ? l : layoutOrder.length);
+        };
+        usable.sort((a, b) => rank(a) - rank(b));
+        const opts = [{ v: '', l: '— 請選擇 —' }];
+        usable.forEach((f) => {
+          const sys = CC_SYSTEM_TYPE_ORDER.includes(f.type) ? '〔系統〕' : '';
+          opts.push({ v: f.code, l: `${sys}${f.label || f.code} (${f.code}) [${f.type}]` });
+          if (!FIELD_TYPES[f.code]) FIELD_TYPES[f.code] = f.type;
+        });
+        CC_FIELD_OPTIONS = opts;
+      })
+      .catch(() => { CC_FIELD_OPTIONS = null; });
 
   const CREATOR_CHECK_EDITABLE_TYPES = new Set([
     'SINGLE_LINE_TEXT', 'MULTI_LINE_TEXT', 'RICH_TEXT', 'NUMBER', 'LINK',
@@ -935,6 +966,7 @@
     sec.appendChild(el('p', { class: 'sda-section-help', style: { marginTop: '14px' } }, [
       '【顯示欄位】決定視窗表格要顯示哪些欄位（由上而下＝由左而右）。'
       + '「建立人」與「帳號狀態」是固定欄，不需要在這裡加。'
+      + '清單包含 kintone 所有原生欄位（標〔系統〕者：記錄編號、狀態、作業者、分類、建立人、建立時間、更新人、更新時間），也包含未放進表單版面的欄位與 Lookup 欄位。'
       + `可就地編輯的型別：${[...CREATOR_CHECK_EDITABLE_TYPES].join('、')}（Lookup 欄位會改成搜尋關聯 App 的記錄）；`
       + '系統欄位（記錄編號、建立人、更新時間、狀態…）與計算欄位無法寫入，附件、子表格不支援單列編輯，一律唯讀顯示。'
     ]));
@@ -982,7 +1014,7 @@
       ]);
 
       tbody.appendChild(el('tr', {}, [
-        el('td', {}, [fieldCombo(FIELD_OPTIONS, col.field, (v) => { c.columns[i].field = v; render(); })]),
+        el('td', {}, [fieldCombo(CC_FIELD_OPTIONS || FIELD_OPTIONS, col.field,(v) => { c.columns[i].field = v; render(); })]),
         el('td', {}, [editCell]),
         el('td', {}, [orderCell]),
         el('td', {}, [el('button', {
@@ -1653,5 +1685,5 @@
     });
   };
 
-  loadFields().then(render);
+  loadFields().then(loadCcFields).then(render);
 })();
