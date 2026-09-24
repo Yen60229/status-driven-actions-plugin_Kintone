@@ -861,7 +861,7 @@
   - **簽核成功**（`process.proceed` 命中且無錯）→ 在 `loggedApply` 樂觀寫一筆成功；kintone 無 `process.proceed.success` 事件可掛。
   - **存檔成功**（`create.submit`/`edit.submit` 命中且無錯）→ 暫存於 `_pendingSubmitLog`，待官方 `*.submit.success` 觸發時由 `flushSubmitLog()` 確認存檔成功後才寫。
   - 早期（v1.4.0–v1.4.3）以全域 `fetch`/`XHR` 攔截器記錄原生動作成敗，v1.5.0 起移除，改為上述事件層做法，不再污染全域。
-- 寫入欄位：`LOG_APP`／`LOG_RECORD` 寫數字字串（數值欄位）；`LOG_USER` 寫 `[{ code }]`（USER_SELECT 需陣列）；其餘為文字。
+- 寫入欄位：`LOG_APP`／`LOG_RECORD` 寫數字字串（數值欄位）。`LOG_APP` 來自 `getAppId()`：依序試 `kintone.app.getId()`、`kintone.mobile.app.getId()`，只接受純數字，都拿不到時從網址 `/k/(m/)(guest/N/)<appId>/` 解析。v1.17.7 以前直接 `String(kintone.app.getId())`，但手機版的 `kintone.app` 物件存在、`getId()` 卻回傳 `null`，結果寫進 `"null"`，數值欄位就回 `CB_VA01「数字でなければなりません」`，Log 只好退回最小欄位（v1.17.8 修正）；`LOG_USER` 寫 `[{ code }]`（USER_SELECT 需陣列）；其餘為文字。
 - 用 `LOG_TOKEN`（若有）寫入 → 無 Log App 權限的操作者也能成功。寫 log 失敗只 `console.error`，**絕不阻擋存檔**。
 - Log App 需要的欄位代碼與型別見第 9 節表格。
 

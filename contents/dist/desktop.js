@@ -93,9 +93,14 @@
   };
 
   const getAppId = () => {
-    if (APP_NS && APP_NS.getId) return String(APP_NS.getId());
-    if (MOBILE_NS && MOBILE_NS.getId) return String(MOBILE_NS.getId());
-    return '';
+    const pick = (ns) => {
+      try {
+        const id = ns && ns.getId ? ns.getId() : null;
+        return id != null && /^\d+$/.test(String(id)) ? String(id) : '';
+      } catch (e) { return ''; }
+    };
+    return pick(APP_NS) || pick(MOBILE_NS) ||
+      ((/\/k\/(?:m\/)?(?:guest\/\d+\/)?(\d+)\//.exec(window.location.pathname || '') || [])[1] || '');
   };
 
   const SESSION_EXPIRED_MESSAGE = '登入已逾時，請開「新分頁」重新登入 kintone 後，回到本頁再執行一次（已填寫的內容不會消失）。';
