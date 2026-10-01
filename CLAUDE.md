@@ -2,6 +2,7 @@
 
 > 此檔為**開發者 / Claude Code** 在本資料夾工作的指引。
 > 給管理者看的「使用說明書」在 [README.md](README.md)；
+> **IT 維護、除錯、升版、交接** → [IT維護手冊.md](IT維護手冊.md)
 > 程式碼層面的完整技術說明集中在 [README.md 附錄 B](README.md)（B-1 ～ B-13）。
 
 ---
@@ -14,6 +15,8 @@
 
 ## 這是什麼
 
+> 執行 Log 寫入本公司的 [SYS-06-6_Plug-In(Log)](https://nipponexpress-taiwan.cybozu.com/k/708/)（App ID 708）。
+
 一個 kintone **外掛（plugin）**。當記錄的流程狀態改變（或儲存、開啟）時，依管理者在設定畫面定義的「規則」自動寫入欄位值、寫入子表格、或寫入其他 App 的記錄，並可選配將每次執行結果記到一個 Log App。
 
 整個外掛是**被動事件驅動、無背景常駐**：只註冊 6 個使用者操作事件，無 `setInterval`／輪詢。詳見 [README.md 附錄 B-2](README.md)。
@@ -25,6 +28,7 @@
 ```
 status-driven-actions-plugin/
 ├── CLAUDE.md                ← 本檔
+├── IT維護手冊.md            ← 給 IT 同仁：架構、除錯症狀表、維運與交接
 ├── README.md                ← 使用說明書 + 附錄 B 技術說明（最重要的參考）
 ├── contents/                ← 外掛原始內容（打包來源）
 │   ├── manifest.json        ← 版本號、事件 JS 註冊、設定畫面宣告
