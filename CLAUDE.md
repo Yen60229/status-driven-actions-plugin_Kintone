@@ -124,7 +124,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ### 匯入規則（重要）
 
-- 設定畫面的「**匯入設定**」只套用 `rules`、`dialogStyle`（v1.15.0）與 `creatorCheck`（v1.17.0），**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`／`adminApiToken`（避免把來源 App 的 Token／App ID 誤帶過去）。
+- 設定畫面的「**匯入設定**」只套用 `rules`、`dialogStyle`（v1.15.0）與 `creatorCheck`（v1.17.0），預設**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`／`adminApiToken`（避免把來源 App 的 Token／App ID 誤帶過去）；v1.19.0 起若 JSON 內含這些值，會再詢問「一併套用／只套規則」。匯出為完整備份（規則選填鍵補齊＋所有 Token 明碼）。
 - 因此自動產生時，**只要輸出 `rules`**即可（有提醒視窗規則且想指定外觀時再加 `dialogStyle`）。可給下列任一形狀：
   - `{ "rules": [ ...規則... ] }`
   - 或直接一個陣列 `[ ...規則... ]`

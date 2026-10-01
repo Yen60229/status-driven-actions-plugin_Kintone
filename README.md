@@ -857,6 +857,13 @@
 - `detail.show`：維持顯示。
 - 第一次 proceed 會覆寫範本列（偵測 `nextStatus` 子規則對應欄位是否為空判斷），之後每次 proceed 改用 push 新增。
 
+**設定畫面的子欄位編輯器（v1.19.0，僅 config.js）**：`valueSource` 選 `appendSubtable` 時，不再顯示 JSON textarea，改由 `renderSubtableEditor` 呈現：
+
+- 「目標欄位」只列本 App 的 SUBTABLE（`SUBTABLE_OPTIONS`）；子欄位清單來自 `loadCcFields` 讀 `/k/v1/preview/app/form/fields.json` 時一併解析 SUBTABLE 的 `fields`，存進 `SUBTABLE_FIELDS[子表代碼]`。
+- 每列＝子欄位（`fieldCombo`，可搜尋）⇐ 值來源（`SUB_VALUE_SOURCES`＝`MAPPING_VALUE_SOURCES` 去掉 `appendText`／`copyAttachment`，加上 `elapsedMinutes`）＋參數；`elapsedMinutes` 的 `sinceField` 改為下拉，只列該子表的 DATETIME 子欄位。
+- `historyMode` 為勾選框；「⚡ 流程履歷範本」一鍵帶入 日期與時間／變更前的狀態／動作／變更後的狀態／簽核人員／經過的時間_分（`HISTORY_PRESET`，子欄位代碼不符時會依欄位名稱對回代碼）；保留「{ } JSON」進階編輯退路。
+- 子欄位代碼不存在於子表時，該列即時顯示紅字，`validate()` 也會擋下儲存。
+
 ### B-8. 執行 Log（v1.3.0）
 
 - 設定 `LOG_APP`（appId）後啟用；`loggedApply()` 包住 `create.submit`/`edit.submit`/`process.proceed`，另註冊 `create.submit.success`/`edit.submit.success`。
@@ -925,7 +932,8 @@
 ### B-12a. 匯出 / 匯入設定（v1.7.0，僅 config.js）
 
 - 設定頁工具列加 `exportConfig` / `importConfig` 兩鈕（皆呼叫 `openTextModal` 自製覆蓋層 modal，內含 readonly/可編輯 `textarea`，不依賴 `prompt`）。
-- **匯出**：`JSON.stringify(state, null, 2)` → `navigator.clipboard.writeText`（失敗則退回手動全選複製），同時開 readonly modal 顯示。內容**含 API Token**（與 B-12「不可 `console.log` config」同等敏感，匯出檔請當機密處理）。
+- **匯出**：`buildFullExport()` → `navigator.clipboard.writeText`（失敗則退回手動全選複製），同時開 readonly modal 顯示。v1.19.0 起匯出為**完整備份**：每條規則以 `RULE_DEFAULTS` 補齊所有選填鍵（dialog 規則另補 `dialog` 全部鍵），`dialogStyle`／`creatorCheck` 補齊預設值，並明確帶出 `selfAppToken`／`tokens[].token`／`logAppId`／`logToken`／`adminApiToken`（設定頁開啟時已從加密代理設定讀回明碼），另加 `exportedFromApp`／`exportedAt`。內容**含明碼 API Token**（與 B-12「不可 `console.log` config」同等敏感，匯出檔請當機密處理）。
+- **匯入時的 Token（v1.19.0）**：若貼上的 JSON 含任何 Token／Log 設定，確認取代規則後會再問一次：「一併套用」（同 App 還原備份）或「只套規則」（複製到別的 App，維持下段的舊行為）。選一併套用時覆寫 `selfAppToken`／`tokens`／`logAppId`／`logToken`／`adminApiToken`，按「儲存」後照常寫入加密代理設定。
 - **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules）與 `parsed.dialogStyle`（v1.15.0，有才套用），`confirm` 後寫回 `state` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。`dialogStyle` 之所以帶、Token 之所以不帶，判準是「是不是本 App 專屬的機密或識別碼」——外觀兩者皆非，且不跟著走的話匯入的提醒規則會長得跟來源 App 不一樣。匯入後僅改記憶體 `state`，按「儲存」才 `setConfig` 落地。
 
 ### B-12c. 存檔後觸發 `*.submit.success`（v1.13.0）

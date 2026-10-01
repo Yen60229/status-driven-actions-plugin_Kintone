@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.18.0';
+  const UI_VERSION = '1.19.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -163,6 +163,43 @@
     { v: 'appendText',     l: '文字串接追加（去重）' },
     { v: 'copyAttachment', l: '附件檔案複製（限存檔後 submit.success）' },
   ];
+
+  const SUB_VALUE_SOURCES = MAPPING_VALUE_SOURCES
+    .filter((o) => !['appendText', 'copyAttachment'].includes(o.v))
+    .concat([{ v: 'elapsedMinutes', l: '距上一列經過分鐘數' }]);
+
+  const HISTORY_PRESET = [
+    { targetField: '日期與時間', valueSource: 'now' },
+    { targetField: '變更前的狀態', valueSource: 'currentStatus' },
+    { targetField: '動作', valueSource: 'actionName' },
+    { targetField: '變更後的狀態', valueSource: 'nextStatus' },
+    { targetField: '簽核人員', valueSource: 'loginUser' },
+    { targetField: '經過的時間_分', valueSource: 'elapsedMinutes', valueParam: { sinceField: '日期與時間' } },
+  ];
+
+  const RULE_DEFAULTS = {
+    id: '',
+    enabled: true,
+    label: '',
+    trigger: 'process.proceed',
+    fromStatus: '*',
+    toStatus: '*',
+    actionName: '*',
+    statusCond: '*',
+    conditions: [],
+    conditionLogic: 'AND',
+    action: 'writeSelf',
+    targetField: '',
+    valueSource: 'fixed',
+    valueParam: '',
+    skipIfFilled: false,
+    appendMode: false,
+    writeMode: 'upsert',
+    targetApp: '',
+    keyMapping: [],
+    fieldMapping: [],
+    onError: 'block',
+  };
 
   const ACTIONS = [
     { v: 'writeSelf',  l: '寫入本記錄欄位' },
@@ -448,10 +485,22 @@
   ];
   const CC_NON_COLUMN_TYPES = new Set(['LABEL', 'SPACER', 'HR', 'GROUP', 'REFERENCE_TABLE']);
   let CC_FIELD_OPTIONS = null;
+  const SUBTABLE_FIELDS = {};
+  const SUBTABLE_OPTIONS = [{ v: '', l: '— 請選擇子表格 —' }];
   const loadCcFields = () =>
     kintone.api(kintone.api.url('/k/v1/preview/app/form/fields.json', true), 'GET', { app: APP_ID })
       .then((resp) => {
         const props = (resp && resp.properties) || {};
+        Object.keys(props).forEach((code) => {
+          const p = props[code];
+          if (!p || p.type !== 'SUBTABLE') return;
+          FIELD_TYPES[code] = 'SUBTABLE';
+          SUBTABLE_OPTIONS.push({ v: code, l: `${p.label || code} (${code}) [SUBTABLE]` });
+          const inner = p.fields || {};
+          SUBTABLE_FIELDS[code] = [{ v: '', l: '— 請選擇子欄位 —' }].concat(
+            Object.keys(inner).map((c) => ({ v: c, l: `${inner[c].label} (${c}) [${inner[c].type}]`, t: inner[c].type }))
+          );
+        });
         const usable = Object.keys(props)
           .map((code) => props[code])
           .filter((f) => f && f.code && !CC_NON_COLUMN_TYPES.has(f.type) && f.enabled !== false);
@@ -1120,29 +1169,7 @@
     sec.appendChild(el('button', {
       class: 'sda-btn sda-btn-add',
       onclick: () => {
-        state.rules.push({
-          id: `r-${Date.now()}`,
-          enabled: true,
-          label: '',
-          trigger: 'process.proceed',
-          fromStatus: '*',
-          toStatus: '*',
-          actionName: '*',
-          statusCond: '*',
-          conditions: [],
-          conditionLogic: 'AND',
-          action: 'writeSelf',
-          targetField: '',
-          valueSource: 'fixed',
-          valueParam: '',
-          skipIfFilled: false,
-          appendMode: false,
-          writeMode: 'upsert',
-          targetApp: '',
-          keyMapping: [],
-          fieldMapping: [],
-          onError: 'block',
-        });
+        state.rules.push(Object.assign(JSON.parse(JSON.stringify(RULE_DEFAULTS)), { id: `r-${Date.now()}` }));
         render();
       },
     }, ['+ 新增規則']));
@@ -1283,6 +1310,112 @@
     return wrap;
   };
 
+  const subRuleParamControl = (sr, subOpts) => {
+    if (sr.valueSource === 'elapsedMinutes') {
+      if (!sr.valueParam || typeof sr.valueParam !== 'object') sr.valueParam = { sinceField: '' };
+      const dtOpts = subOpts.filter((o) => !o.v || o.t === 'DATETIME');
+      const wrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px' } });
+      wrap.appendChild(select(dtOpts.length > 1 ? dtOpts : subOpts, sr.valueParam.sinceField || '', (v) => { sr.valueParam.sinceField = v; }));
+      wrap.appendChild(el('span', { style: { fontSize: '11px', color: '#888' } }, ['以上一列此「日期時間」子欄位為起點；第一列＝0']));
+      return wrap;
+    }
+    return mappingParamControl(sr);
+  };
+
+  const renderSubtableEditor = (r) => {
+    if (typeof r.valueParam === 'string' && r.valueParam.trim()) {
+      try { r.valueParam = JSON.parse(r.valueParam); } catch (e) {  }
+    }
+    if (!r.valueParam || typeof r.valueParam !== 'object' || Array.isArray(r.valueParam)) {
+      r.valueParam = { historyMode: false, subRules: [] };
+    }
+    const p = r.valueParam;
+    if (!Array.isArray(p.subRules)) p.subRules = [];
+    const subOpts = SUBTABLE_FIELDS[r.targetField];
+    const wrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+
+    wrap.appendChild(checkbox(p.historyMode === true, (v) => { p.historyMode = v; },
+      '履歷模式（新增畫面自動清空此子表；新增／編輯畫面隱藏此子表，只能由外掛寫入）'));
+
+    if (!r.targetField) {
+      wrap.appendChild(el('div', { style: { color: '#888', fontSize: '12px' } }, ['請先在上方「目標欄位」選擇子表格，下方才會列出它的子欄位。']));
+    } else if (!subOpts) {
+      wrap.appendChild(el('div', { class: 'sda-error' }, [`「${r.targetField}」不是本 App 的子表格（或欄位清單尚未載入），子欄位只能手動輸入代碼。`]));
+    }
+    const opts = subOpts || [{ v: '', l: '— 手動輸入子欄位代碼 —' }];
+    const known = new Set(opts.map((o) => o.v).filter(Boolean));
+
+    p.subRules.forEach((sr, si) => {
+      const row = el('div', { class: 'sda-mapping-row' });
+      const fieldWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '2px', minWidth: '0' } });
+      fieldWrap.appendChild(fieldCombo(opts, sr.targetField, (v) => { p.subRules[si].targetField = v; render(); }));
+      if (subOpts && sr.targetField && !known.has(sr.targetField)) {
+        fieldWrap.appendChild(el('span', { class: 'sda-error', style: { fontSize: '11px' } }, [`⚠ 子表中沒有「${sr.targetField}」`]));
+      }
+      row.appendChild(fieldWrap);
+      row.appendChild(el('span', { class: 'sda-arrow' }, ['⇐']));
+      const srcWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '0' } });
+      srcWrap.appendChild(select(SUB_VALUE_SOURCES, sr.valueSource || 'fixed', (v) => {
+        p.subRules[si].valueSource = v;
+        p.subRules[si].valueParam = v === 'elapsedMinutes' ? { sinceField: '' } : '';
+        render();
+      }));
+      srcWrap.appendChild(subRuleParamControl(sr, opts));
+      row.appendChild(srcWrap);
+      row.appendChild(el('button', { class: 'sda-btn-row', onclick: () => { p.subRules.splice(si, 1); render(); } }, ['✕']));
+      wrap.appendChild(row);
+    });
+
+    const btnStyle = { fontSize: '11px', padding: '3px 9px', marginTop: '0' };
+    const btnRow = el('div', { style: { display: 'flex', gap: '8px', marginTop: '2px', flexWrap: 'wrap' } });
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn sda-btn-add', style: Object.assign({ color: '#2471a3', borderColor: '#aed6f1' }, btnStyle),
+      onclick: () => { p.subRules.push({ targetField: '', valueSource: 'now' }); render(); },
+    }, ['+ 新增子欄位']));
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn', style: btnStyle,
+      title: '帶入「日期與時間／變更前狀態／動作／變更後狀態／簽核人員／經過分鐘」的流程履歷範本',
+      onclick: async () => {
+        if (p.subRules.length) {
+          const ok = await askConfirm({ icon: 'warn', title: '套用流程履歷範本', text: `會取代目前的 ${p.subRules.length} 個子欄位設定，確定嗎？` });
+          if (!ok) return;
+        }
+        const preset = JSON.parse(JSON.stringify(HISTORY_PRESET));
+        if (subOpts) {
+          const byLabel = {};
+          subOpts.forEach((o) => { if (o.v) byLabel[o.l.replace(/\s*\(.*$/, '')] = o.v; });
+          preset.forEach((sr) => {
+            if (!known.has(sr.targetField) && byLabel[sr.targetField]) sr.targetField = byLabel[sr.targetField];
+          });
+        }
+        p.subRules = preset;
+        p.historyMode = true;
+        render();
+      },
+    }, ['⚡ 流程履歷範本']));
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn', style: btnStyle,
+      title: '進階：直接以 JSON 編輯整個參數',
+      onclick: () => openTextModal({
+        title: '進階：直接編輯子表格參數 JSON（{ historyMode, subRules }）',
+        value: JSON.stringify(p, null, 2),
+        confirmLabel: '套用',
+        onConfirm: async (text) => {
+          let parsed;
+          try { parsed = JSON.parse(text); }
+          catch { await notify({ icon: 'error', title: '格式錯誤', text: 'JSON 格式錯誤，請檢查括號與引號是否成對。' }); return false; }
+          if (!parsed || typeof parsed !== 'object' || !Array.isArray(parsed.subRules)) {
+            await notify({ icon: 'error', title: '格式錯誤', text: '必須是 { "historyMode": true, "subRules": [ ... ] } 的形狀。' });
+            return false;
+          }
+          r.valueParam = parsed; render();
+        },
+      }),
+    }, ['{ } JSON']));
+    wrap.appendChild(btnRow);
+    return wrap;
+  };
+
   const renderRuleCard = (r, idx) => {
     const card = el('div', {
       class: 'sda-rule-card' + (r.enabled === false ? ' is-disabled' : '')
@@ -1389,11 +1522,14 @@
       }, ['👁 預覽此提醒視窗']));
 
     } else if (r.action === 'writeSelf') {
-      addRow('目標欄位', fieldCombo(FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
+      const isSubtable = r.valueSource === 'appendSubtable';
+      addRow('目標欄位', fieldCombo(isSubtable && SUBTABLE_OPTIONS.length > 1 ? SUBTABLE_OPTIONS : FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
       addRow('值的來源', searchableSelect(VALUE_SOURCES, r.valueSource, (v) => { r.valueSource = v; render(); }));
 
       const needsParam = ['fixed', 'fieldCopy', 'formula', 'lookup', 'dateShift', 'appendSubtable', 'subtableLastRow', 'appendText', 'copyAttachment'].includes(r.valueSource);
-      if (needsParam) {
+      if (isSubtable) {
+        addRow('子欄位對應', renderSubtableEditor(r));
+      } else if (needsParam) {
         const isJson = ['lookup', 'dateShift', 'appendSubtable', 'subtableLastRow', 'appendText', 'copyAttachment'].includes(r.valueSource);
         const jsonPlaceholder = {
           lookup:         '{ "app": "456", "keyField": "客戶代碼", "keyExpr": "{客戶代碼}", "returnField": "聯絡電話", "onMiss": "empty" }',
@@ -1480,12 +1616,37 @@
     if (readonly) ta.select();
   };
 
+  const buildFullExport = () => {
+    const full = JSON.parse(JSON.stringify(state));
+    full.exportedFromApp = String(APP_ID);
+    full.exportedAt = new Date().toISOString();
+    full.selfAppToken = String(full.selfAppToken || '');
+    full.logAppId = String(full.logAppId || '');
+    full.logToken = String(full.logToken || '');
+    full.adminApiToken = String(full.adminApiToken || '');
+    full.tokens = (full.tokens || []).map((t) => ({
+      appId: String((t && t.appId) || ''), appLabel: String((t && t.appLabel) || ''), token: String((t && t.token) || ''),
+    }));
+    full.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, full.dialogStyle || {});
+    full.creatorCheck = Object.assign({}, DEFAULT_CREATOR_CHECK, full.creatorCheck || {});
+    full.creatorCheck.visibility = Object.assign({}, DEFAULT_CREATOR_CHECK_VISIBILITY, full.creatorCheck.visibility || {});
+    full.rules = (full.rules || []).map((r) => {
+      const out = Object.assign(JSON.parse(JSON.stringify(RULE_DEFAULTS)), r);
+      if (out.action === 'dialog') {
+        out.dialog = Object.assign({ icon: 'warn', title: '', text: '', confirmLabel: 'OK', cancelLabel: '', cancelMessage: '', accent: '' }, out.dialog || {});
+      }
+      return out;
+    });
+    return full;
+  };
+
   const exportConfig = () => {
-    const json = JSON.stringify(state, null, 2);
+    const json = JSON.stringify(buildFullExport(), null, 2);
     const show = (copied) => openTextModal({
-      title: copied
-        ? '已複製到剪貼簿，可到另一個 App 的外掛設定頁按「匯入設定」貼上'
-        : '請手動全選複製以下設定，再到另一個 App 匯入',
+      title: (copied
+        ? '已複製到剪貼簿（含全部規則、選填設定與所有 Token），可到另一個 App 的外掛設定頁按「匯入設定」貼上'
+        : '請手動全選複製以下設定（含全部規則、選填設定與所有 Token），再到另一個 App 匯入')
+        + '　⚠ 內含明碼 API Token，請勿貼到公開處',
       value: json, readonly: true,
     });
     if (navigator.clipboard && navigator.clipboard.writeText) {
@@ -1497,7 +1658,7 @@
 
   const importConfig = () => {
     openTextModal({
-      title: '貼上從其他 App 匯出的設定 JSON（只會套用「規則」，本 App 的 Token／Log 設定保留不變）',
+      title: '貼上匯出的設定 JSON（若含 Token／Log 設定，會再詢問是否一併套用）',
       value: '', confirmLabel: '套用規則',
       onConfirm: async (text) => {
         let parsed;
@@ -1519,10 +1680,34 @@
         const checkNote = incomingCheck ? '\n（建立人狀態檢查的設定也會一併套用；權杖仍需本 App 自己填）' : '';
         const agreed = await askConfirm({
           icon: 'warn', title: '確認匯入',
-          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。\n（本 App 的 Token／Log App ID 不會變動）${styleNote}${checkNote}`,
+          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。${styleNote}${checkNote}`,
           confirmLabel: '確定取代', cancelLabel: '再想想',
         });
         if (!agreed) return false;
+        const hasSecrets = !Array.isArray(parsed) && (
+          String(parsed.selfAppToken || '').trim() || String(parsed.logAppId || '').trim() ||
+          String(parsed.logToken || '').trim() || String(parsed.adminApiToken || '').trim() ||
+          (Array.isArray(parsed.tokens) && parsed.tokens.some((t) => t && (t.appId || t.token))));
+        let applySecrets = false;
+        if (hasSecrets) {
+          applySecrets = await askConfirm({
+            icon: 'question', title: '是否一併套用 Token／Log 設定？',
+            text: '這份設定裡含有 API Token／跨 App Token／Log App ID／共通管理 API 權杖。\n'
+              + '・同一個 App 還原備份 → 選「一併套用」\n'
+              + '・複製到另一個 App → 選「只套規則」（避免把來源 App 的 Token 帶過來）',
+            confirmLabel: '一併套用', cancelLabel: '只套規則',
+          });
+        }
+        if (applySecrets) {
+          state.selfAppToken = String(parsed.selfAppToken || '');
+          state.logAppId = String(parsed.logAppId || '');
+          state.logToken = String(parsed.logToken || '');
+          state.adminApiToken = String(parsed.adminApiToken || '');
+          state.tokens = (Array.isArray(parsed.tokens) ? parsed.tokens : [])
+            .filter((t) => t && typeof t === 'object')
+            .map((t) => ({ appId: String(t.appId || ''), appLabel: String(t.appLabel || ''), token: String(t.token || '') }));
+          Object.keys(CC_DIRECTORY).forEach((k) => { CC_DIRECTORY[k] = { status: 'idle', opts: [], error: '' }; });
+        }
         state.rules = rules;
         if (incomingStyle) state.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, incomingStyle);
         if (incomingCheck) {
@@ -1583,6 +1768,19 @@
       }
       if (r.action === 'writeOther' && (!Array.isArray(r.fieldMapping) || !r.fieldMapping.length)) {
         errors.push(`${id}: 缺少欄位對應`);
+      }
+      if (r.action === 'writeSelf' && r.valueSource === 'appendSubtable' && r.targetField) {
+        const subOpts = SUBTABLE_FIELDS[r.targetField];
+        const subRules = (r.valueParam && Array.isArray(r.valueParam.subRules)) ? r.valueParam.subRules : [];
+        if (SUBTABLE_OPTIONS.length > 1 && !subOpts) errors.push(`${id}: 「${r.targetField}」不是子表格`);
+        if (!subRules.length) errors.push(`${id}: 子表格履歷至少要設定一個子欄位`);
+        if (subOpts) {
+          const known = new Set(subOpts.map((o) => o.v).filter(Boolean));
+          subRules.forEach((sr) => {
+            if (!sr || !sr.targetField) errors.push(`${id}: 有子欄位對應未選擇子欄位`);
+            else if (!known.has(sr.targetField)) errors.push(`${id}: 子表「${r.targetField}」中沒有子欄位「${sr.targetField}」`);
+          });
+        }
       }
       if (ruleUsesCopyAttachment(r) && !isSubmitSuccessOnlyTrigger(r)) {
         errors.push(`${id}: 附件檔案複製 (copyAttachment) 僅能在「存檔後」觸發時機使用，請只勾選「新增存檔後」或「編輯存檔後」`);
