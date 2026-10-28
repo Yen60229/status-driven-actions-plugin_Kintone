@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.21.1';
+  const UI_VERSION = '1.21.2';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -1593,6 +1593,30 @@
     return sec;
   };
 
+  const COND_ENTITY_KIND = {
+    USER_SELECT: 'users', CREATOR: 'users', MODIFIER: 'users', STATUS_ASSIGNEE: 'users',
+    ORGANIZATION_SELECT: 'organizations', GROUP_SELECT: 'groups',
+  };
+
+  const renderCondEntityPicker = (cond, kind) => {
+    const hint = (text, color) => el('div', { style: { fontSize: '11px', color: color || '#6b7480' } }, [text]);
+    if (!String(state.adminApiToken || '').trim()) {
+      return hint(`填入第 1 區的共通管理 API 權杖後可搜尋${CC_KIND_LABEL[kind]}；目前請直接輸入代碼`, '#b9770e');
+    }
+    const dirEntry = CC_DIRECTORY[kind];
+    if (dirEntry.status === 'idle') ensureCcDirectory(kind);
+    if (dirEntry.status === 'loading') return hint(`${CC_KIND_LABEL[kind]}名單載入中…`);
+    if (dirEntry.status === 'error') return el('div', { class: 'sda-error', style: { fontSize: '11px' } }, [`${CC_KIND_LABEL[kind]}名單載入失敗：${dirEntry.error}`]);
+
+    const codes = String(cond.value || '').split(',').map((x) => x.trim()).filter(Boolean);
+    const multi = cond.op === 'inList';
+    const available = multi ? dirEntry.opts.filter((o) => !codes.includes(o.v)) : dirEntry.opts;
+    return searchAddInput(available, (code) => {
+      cond.value = multi ? codes.concat(code).join(',') : code;
+      render();
+    }, `🔍 搜尋${CC_KIND_LABEL[kind]}${kind === 'users' ? '姓名' : '名稱'}／代碼${multi ? '（可多選）' : ''}…`);
+  };
+
   const renderConditionsEditor = (r) => {
     if (!Array.isArray(r.conditions)) r.conditions = [];
     if (!r.conditionLogic) r.conditionLogic = 'AND';
@@ -1636,12 +1660,23 @@
         display: 'grid', gridTemplateColumns: '1fr 120px 1fr auto', gap: '5px', alignItems: 'center'
       }});
 
-      row.appendChild(fieldCombo(FIELD_OPTIONS, cond.field, (v) => { r.conditions[ci].field = v; }));
+      row.appendChild(fieldCombo(FIELD_OPTIONS, cond.field, (v) => { r.conditions[ci].field = v; render(); }));
 
-      row.appendChild(select(COND_OPS, cond.op || 'eq', (v) => { r.conditions[ci].op = v; }));
+      row.appendChild(select(COND_OPS, cond.op || 'eq', (v) => { r.conditions[ci].op = v; render(); }));
 
-      const valI = textInput(cond.value, (v) => { r.conditions[ci].value = v; }, '比對值');
-      row.appendChild(valI);
+      const entityKind = COND_ENTITY_KIND[FIELD_TYPES[cond.field]];
+      const valPh = entityKind
+        ? (cond.op === 'inList' ? `${CC_KIND_LABEL[entityKind]}代碼，多個用逗號` : `${CC_KIND_LABEL[entityKind]}代碼`)
+        : '比對值';
+      const valI = textInput(cond.value, (v) => { r.conditions[ci].value = v; }, valPh);
+      if (entityKind) {
+        const valWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '0' } });
+        valWrap.appendChild(valI);
+        valWrap.appendChild(renderCondEntityPicker(cond, entityKind));
+        row.appendChild(valWrap);
+      } else {
+        row.appendChild(valI);
+      }
 
       row.appendChild(el('button', {
         class: 'sda-btn-row',

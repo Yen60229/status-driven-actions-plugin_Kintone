@@ -972,6 +972,12 @@
           });
           return out.length ? out : [''];
         }
+        if (typeof v === 'object') {
+          const out = [];
+          if (v.code != null) out.push(String(v.code));
+          if (v.name != null) out.push(String(v.name));
+          return out.length ? out : [''];
+        }
         return [String(v)];
       };
 

@@ -206,7 +206,7 @@
 >
 > 🔸 **多個值要「任一成立」就用「屬於清單」**，不要用「包含」。「包含」是看欄位值裡有沒有你打的那一整串字，無法一次比對多個值。
 >
-> 🔸 **各種欄位類型都支援**：單選、下拉、文字、數字直接比對值；**複選 / 多選 / 使用者 / 組織 / 群組**等多值欄位，只要其中一個選項符合即成立（使用者類欄位可用代碼或顯示名稱比對）。
+> 🔸 **各種欄位類型都支援**：單選、下拉、文字、數字直接比對值；**複選 / 多選 / 使用者 / 組織 / 群組**等多值欄位，只要其中一個選項符合即成立（使用者類欄位可用代碼或顯示名稱比對）。比對欄位是使用者／組織／群組選擇、建立者、更新者、作業者時，比對值下方會多一個搜尋框，打姓名或代碼就能選，不用自己查代碼（要先在第 1 區填共通管理 API 權杖；沒填時照樣可以手動輸入代碼）。
 
 ---
 
@@ -994,7 +994,9 @@ v1.20.0 起 `writeToField` 先依 `record[code].type` 特判：`SUBTABLE` 只接
 
 ### B-10. 規則比對（conditions）
 
-`rule.conditions = [{ field, value, op }]`，`op`：`eq`(預設)/`neq`/`startsWith`/`contains`/`inList`；`rule.conditionLogic`：`AND`(預設)/`OR`。多值欄位（複選/使用者/組織/群組）會把每個元素（物件取 `code` 與 `name`）展開成候選清單比對。
+`rule.conditions = [{ field, value, op }]`，`op`：`eq`(預設)/`neq`/`startsWith`/`contains`/`inList`；`rule.conditionLogic`：`AND`(預設)/`OR`。多值欄位（複選/使用者/組織/群組）會把每個元素（物件取 `code` 與 `name`）展開成候選清單比對；單一物件值（`CREATOR`／`MODIFIER`）同樣取 `code` 與 `name`（v1.21.2 前會被轉成 `[object Object]` 而永遠比不到）。
+
+設定畫面（v1.21.2）：`renderConditionsEditor` 依 `FIELD_TYPES[cond.field]` 查 `COND_ENTITY_KIND`（`USER_SELECT`／`CREATOR`／`MODIFIER`／`STATUS_ASSIGNEE`→`users`、`ORGANIZATION_SELECT`→`organizations`、`GROUP_SELECT`→`groups`），在比對值輸入框下加 `renderCondEntityPicker`：沿用建立人狀態檢查的 `ensureCcDirectory`（共通管理 API 一次抓全部名單快取）＋`searchAddInput`。`op` 為 `inList` 時選取＝以逗號追加代碼，其餘 `op` 為取代。存的仍是代碼字串，runtime 不變。無權杖時只顯示提示，可手動輸入代碼。換欄位／換運算子會 `render()` 以切換選擇器。
 
 ### B-10a. 狀態條件支援多值（v1.7.2）
 

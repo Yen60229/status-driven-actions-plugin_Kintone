@@ -268,7 +268,7 @@ status-driven-actions-plugin/
 
 ### conditions 的 `op`
 
-`eq`(預設,完全相等)／`neq`／`startsWith`／`contains`／`inList`（`value` 用逗號分隔，任一命中）。多值欄位（複選/使用者/組織/群組）會展開每個元素（取 `code` 與 `name`）比對。
+`eq`(預設,完全相等)／`neq`／`startsWith`／`contains`／`inList`（`value` 用逗號分隔，任一命中）。多值欄位（複選/使用者/組織/群組）與單一物件值（建立者/更新者）都會展開成 `code` 與 `name` 比對。設定畫面的使用者／組織／群組類欄位條件有姓名／代碼搜尋選擇器（`renderCondEntityPicker`，需共通管理 API 權杖，v1.21.2）。
 
 ### 最小可匯入範例
 
