@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.21.2';
+  const UI_VERSION = '1.22.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -263,7 +263,9 @@
     { v: 'neq',        l: '不等於 (≠)' },
     { v: 'startsWith', l: '開頭為' },
     { v: 'contains',   l: '包含' },
+    { v: 'notContains', l: '不包含' },
     { v: 'inList',     l: '屬於清單（任一，逗號分隔）' },
+    { v: 'notInList',  l: '不屬於清單（都不是，逗號分隔）' },
   ];
 
   const el = (tag, props = {}, children = []) => {
@@ -1609,7 +1611,7 @@
     if (dirEntry.status === 'error') return el('div', { class: 'sda-error', style: { fontSize: '11px' } }, [`${CC_KIND_LABEL[kind]}名單載入失敗：${dirEntry.error}`]);
 
     const codes = String(cond.value || '').split(',').map((x) => x.trim()).filter(Boolean);
-    const multi = cond.op === 'inList';
+    const multi = cond.op === 'inList' || cond.op === 'notInList';
     const available = multi ? dirEntry.opts.filter((o) => !codes.includes(o.v)) : dirEntry.opts;
     return searchAddInput(available, (code) => {
       cond.value = multi ? codes.concat(code).join(',') : code;
@@ -1666,7 +1668,7 @@
 
       const entityKind = COND_ENTITY_KIND[FIELD_TYPES[cond.field]];
       const valPh = entityKind
-        ? (cond.op === 'inList' ? `${CC_KIND_LABEL[entityKind]}代碼，多個用逗號` : `${CC_KIND_LABEL[entityKind]}代碼`)
+        ? (['inList', 'notInList'].includes(cond.op) ? `${CC_KIND_LABEL[entityKind]}代碼，多個用逗號` : `${CC_KIND_LABEL[entityKind]}代碼`)
         : '比對值';
       const valI = textInput(cond.value, (v) => { r.conditions[ci].value = v; }, valPh);
       if (entityKind) {

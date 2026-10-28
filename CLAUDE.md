@@ -113,7 +113,7 @@ status-driven-actions-plugin/
 | 錯誤分類 | `errorCodeOf`/`classifyError`/`friendlyError`/`recordError`（`session`/`permission`/`config`/`system`） | B-8a |
 | 錯誤顯示 | `blockEvent`／`flushErrorDialog`：擋下動作的錯誤只在 `event.error` 放短句 `NATIVE_BLOCK_TEXT`，完整原因用 `SdaDialog.show()`（全域 SweetAlert）顯示；會先等其他 Swal 關閉；**新增錯誤擋下路徑時一律呼叫 `blockEvent`／`recordError`，不要直接寫 `event.error`**（v1.21.0） | B-18 |
 | 寫入判別 | `classifyWrite`（userObject / arrayField / scalar） | B-9 |
-| 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
+| 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/notContains/inList/notInList）+ `conditionLogic` | B-10 |
 | 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
 | 觸發複選 | `triggerMatches`／`statusMatches` 依實際觸發事件分流；`rule.trigger` 可逗號分隔複選（v1.9.0） | B-10b |
 | 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`）：**呼叫當下**偵測 `window.Swal`，有就用 SweetAlert2、沒有才用內建元件，樣式限定在 `.sda-swal` 底下（v1.16.0） | B-14 |
@@ -268,7 +268,7 @@ status-driven-actions-plugin/
 
 ### conditions 的 `op`
 
-`eq`(預設,完全相等)／`neq`／`startsWith`／`contains`／`inList`（`value` 用逗號分隔，任一命中）。多值欄位（複選/使用者/組織/群組）與單一物件值（建立者/更新者）都會展開成 `code` 與 `name` 比對。設定畫面的使用者／組織／群組類欄位條件有姓名／代碼搜尋選擇器（`renderCondEntityPicker`，需共通管理 API 權杖，v1.21.2）。
+`eq`(預設,完全相等)／`neq`／`startsWith`／`contains`／`notContains`（不含該字串）／`inList`（`value` 用逗號分隔，任一命中）／`notInList`（逗號分隔，全部不命中才成立；v1.22.0）。多值欄位（複選/使用者/組織/群組）與單一物件值（建立者/更新者）都會展開成 `code` 與 `name` 比對。設定畫面的使用者／組織／群組類欄位條件有姓名／代碼搜尋選擇器（`renderCondEntityPicker`，需共通管理 API 權杖，v1.21.2）。
 
 ### 最小可匯入範例
 

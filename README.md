@@ -189,7 +189,7 @@
 | 設定 | 說明 |
 |---|---|
 | 欄位 | 要比對的欄位（可打字搜尋，列出本 App 所有欄位） |
-| 運算子 | 等於 / 不等於 / 開頭為 / 包含 / 屬於清單 |
+| 運算子 | 等於 / 不等於 / 開頭為 / 包含 / 不包含 / 屬於清單 / 不屬於清單 |
 | 比對值 | 要比對的文字 |
 
 條件上方有 **AND / OR** 切換：AND（預設）＝全部成立才執行，OR＝任一條成立就執行。沒有任何條件＝不限制。
@@ -200,7 +200,11 @@
 | 不等於 (≠) | 欄位值不同 | 狀態 **不等於** `作廢` |
 | 開頭為 | 欄位值的開頭符合 | 申請類別 **開頭為** `停用`（可比對到「停用（交易中止）」）|
 | 包含 | 欄位值裡含有這段文字 | 備註 **包含** `急件` |
+| 不包含 | 欄位值裡**沒有**這段文字 | 備註 **不包含** `急件` |
 | 屬於清單（任一） | 欄位值是清單裡的**任何一個**就成立（**用逗號分隔**） | 申請類別 **屬於清單** `變更,恢復,年度定期更新` |
+| 不屬於清單（都不是） | 欄位值**不是**清單裡的任何一個才成立（**用逗號分隔**）；多值欄位只要有一個選項在清單裡就不成立 | 申請部門 **不屬於清單** `D20` → 資訊部的記錄不套用 |
+
+> 💡 **「除了某個組織以外都鎖定」**：唯讀鎖定規則加條件「申請部門 **不屬於清單** `D20`」，D20 的記錄就不會被鎖，可以照常編輯；要排除多個組織就用逗號分隔，例如 `D20,D30`。
 
 > 💡 適用所有觸發時機（流程推進、儲存前、載入時都可用），電腦版與手機版行為一致。
 >
@@ -994,9 +998,9 @@ v1.20.0 起 `writeToField` 先依 `record[code].type` 特判：`SUBTABLE` 只接
 
 ### B-10. 規則比對（conditions）
 
-`rule.conditions = [{ field, value, op }]`，`op`：`eq`(預設)/`neq`/`startsWith`/`contains`/`inList`；`rule.conditionLogic`：`AND`(預設)/`OR`。多值欄位（複選/使用者/組織/群組）會把每個元素（物件取 `code` 與 `name`）展開成候選清單比對；單一物件值（`CREATOR`／`MODIFIER`）同樣取 `code` 與 `name`（v1.21.2 前會被轉成 `[object Object]` 而永遠比不到）。
+`rule.conditions = [{ field, value, op }]`，`op`：`eq`(預設)/`neq`/`startsWith`/`contains`/`notContains`/`inList`/`notInList`（v1.22.0 加 `notContains`＝`!some(includes)`、`notInList`＝`!some(list.includes)`；欄位空白時兩者皆成立）；`rule.conditionLogic`：`AND`(預設)/`OR`。多值欄位（複選/使用者/組織/群組）會把每個元素（物件取 `code` 與 `name`）展開成候選清單比對；單一物件值（`CREATOR`／`MODIFIER`）同樣取 `code` 與 `name`（v1.21.2 前會被轉成 `[object Object]` 而永遠比不到）。
 
-設定畫面（v1.21.2）：`renderConditionsEditor` 依 `FIELD_TYPES[cond.field]` 查 `COND_ENTITY_KIND`（`USER_SELECT`／`CREATOR`／`MODIFIER`／`STATUS_ASSIGNEE`→`users`、`ORGANIZATION_SELECT`→`organizations`、`GROUP_SELECT`→`groups`），在比對值輸入框下加 `renderCondEntityPicker`：沿用建立人狀態檢查的 `ensureCcDirectory`（共通管理 API 一次抓全部名單快取）＋`searchAddInput`。`op` 為 `inList` 時選取＝以逗號追加代碼，其餘 `op` 為取代。存的仍是代碼字串，runtime 不變。無權杖時只顯示提示，可手動輸入代碼。換欄位／換運算子會 `render()` 以切換選擇器。
+設定畫面（v1.21.2）：`renderConditionsEditor` 依 `FIELD_TYPES[cond.field]` 查 `COND_ENTITY_KIND`（`USER_SELECT`／`CREATOR`／`MODIFIER`／`STATUS_ASSIGNEE`→`users`、`ORGANIZATION_SELECT`→`organizations`、`GROUP_SELECT`→`groups`），在比對值輸入框下加 `renderCondEntityPicker`：沿用建立人狀態檢查的 `ensureCcDirectory`（共通管理 API 一次抓全部名單快取）＋`searchAddInput`。`op` 為 `inList`／`notInList` 時選取＝以逗號追加代碼，其餘 `op` 為取代。存的仍是代碼字串，runtime 不變。無權杖時只顯示提示，可手動輸入代碼。換欄位／換運算子會 `render()` 以切換選擇器。
 
 ### B-10a. 狀態條件支援多值（v1.7.2）
 

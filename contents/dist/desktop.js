@@ -991,9 +991,14 @@
           case 'neq':        return !actuals.includes(exp);
           case 'startsWith': return actuals.some((a) => a.startsWith(exp));
           case 'contains':   return actuals.some((a) => a.includes(exp));
+          case 'notContains': return !actuals.some((a) => a.includes(exp));
           case 'inList': {
             const list = splitList(cond.value);
             return actuals.some((a) => list.includes(a));
+          }
+          case 'notInList': {
+            const list = splitList(cond.value);
+            return !actuals.some((a) => list.includes(a));
           }
           case 'eq':
           default:           return actuals.includes(exp);
