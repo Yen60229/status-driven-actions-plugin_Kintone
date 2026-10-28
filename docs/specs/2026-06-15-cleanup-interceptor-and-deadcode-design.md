@@ -46,7 +46,7 @@
 | `create.submit` / `edit.submit` | 規則出錯，維持原本在 submit handler（`loggedApply`）記一筆失敗 | 改掛官方 `create.submit.success` / `edit.submit.success`，待 kintone 確認存檔成功後才記成功 |
 | `process.proceed` | 規則出錯擋住簽核，維持原本在 proceed handler 記失敗 | 在 proceed handler 內，規則執行完畢且無錯誤（若有設 SELF_TOKEN，再加上 edit-check 通過）即記為成功 |
 
-這裡的取捨需要說明：簽核成功這一筆屬於「外掛已乾淨送出」的樂觀記錄，並不等於 kintone 最終 commit 成功。但實務上 handler 既已乾淨 `return`，簽核在 HTTP 層再失敗的機率很低；即使失敗，使用者當下也看得到，記錄狀態本來就不會改變。為了這 5% 的精準度去維護一個覆寫全域、每個請求都要介入的 monkey-patch，並不划算。
+這裡的取捨需要說明：簽核成功這一筆屬於「外掛已乾淨送出」的樂觀記錄，並不等於 kintone 最終 commit 成功。但實務上 handler 既已乾淨 `return`，簽核在 HTTP 層再失敗的機率很低；即使失敗，使用者當下也看得到，記錄狀態本來就不會改變。為了這一點點精準度，去維護一段覆寫全域、每個請求都要經過的攔截程式，並不划算。
 
 對使用者而言 log 的呈現不變：Log App 中一樣會有成功、失敗兩類記錄，欄位與分類（`LOG_RESULT`、`LOG_CATEGORY`、`LOG_MESSAGE` 等）格式照舊。唯一會失去的是「簽核被 kintone 因外掛以外的原因擋下」這種記錄，而這種情況本來就少見，外掛管理員即使看到也無從修正。
 
@@ -72,7 +72,7 @@
 - `TIME_VALUE_SOURCES`、`ruleNeedsServerTime`
 - `_timeCache`、`SERVER_TIME_CACHE_MS`、`SERVER_TIME_TIMEOUT_MS`、`getServerTime`
 - `applyRules` 內 `needsTime` / `serverTimePromise` / `serverTime` 的判斷與等待
-- `ctx` 不再帶 `serverTime`；`resolveValue` 與 `elapsedMinutes` 內的 `serverTime || new Date()` 收斂為 `new Date()`
+- `ctx` 不再帶 `serverTime`；`resolveValue` 與 `elapsedMinutes` 內的 `serverTime || new Date()` 統一改為 `new Date()`
 
 ---
 

@@ -1,12 +1,12 @@
 # 狀態驅動動作外掛 — IT 維護手冊
 
 **對象**：接手維護、除錯、升版的 IT 同仁
-**適用版本**：v1.18.0（`contents/manifest.json` 的 `version`）
+**適用版本**：v1.20.0（`contents/manifest.json` 的 `version`）
 **姊妹文件**：
 - 管理者怎麼設規則 → [README.md](README.md) 第 1～10 節
-- 技術細節逐項說明 → [README.md 附錄 B](README.md)（B-1 ～ B-15）
+- 技術細節逐項說明 → [README.md 附錄 B](README.md)（B-1 ～ B-16）
 - 提醒視窗怎麼設 → [提醒視窗操作教學.md](提醒視窗操作教學.md)
-- 開發規矩（給改程式的人）→ [CLAUDE.md](CLAUDE.md)
+- 開發規範與設定 JSON 格式（給改程式的人）→ [CLAUDE.md](CLAUDE.md)
 
 > 本手冊不重複 README 的操作步驟，專門回答三件事：**這東西怎麼運作、壞了先看哪裡、要改的時候怎麼改不出事。**
 
@@ -34,11 +34,12 @@
 ## 1. 先看這裡：五分鐘速覽
 
 **這個外掛做什麼**
-記錄的流程狀態改變（或新增、編輯、儲存）時，依管理者在設定畫面定義的「規則」，自動做三件事之一：
+記錄的流程狀態改變（或新增、編輯、儲存）時，依管理者在設定畫面定義的「規則」，自動做下面其中一件事：
 
 | 動作 (`action`) | 白話 |
 |---|---|
 | `writeSelf` | 把值寫進**本筆記錄**的欄位或子表格 |
+| `writeSelfBatch` | 一條規則一次寫**本筆記錄**的多個欄位（清空、固定值…），常用於「再利用」新增時整理欄位（v1.20.0） |
 | `writeOther` | 把值寫進**其他 App** 的記錄（新增／更新／有就更新沒有就新增） |
 | `dialog` | 跳出提醒視窗，使用者按確定才往下做；有取消鍵時可中止儲存或流程推進 |
 
@@ -56,7 +57,7 @@
    └─③ 對照第 6 節的症狀表
 ```
 
-**四條不能碰的線**（違反會出大事，細節見第 11 節）
+**四條不能違反的規矩**（細節見第 11 節）
 
 1. `desktop.js` 與 `mobile.js` 必須一模一樣。
 2. 不要 `console.log` 原始設定（內含 Token）。
@@ -97,7 +98,7 @@
 
 1. **程式只有一份，設定每個 App 一份。** 升級外掛 = 所有 App 的程式一起換新，各 App 的規則不受影響。
 2. **執行期程式在使用者的瀏覽器裡跑**，用的是使用者自己的登入身分。權限不夠時才改用 API Token 代打（見 4.2）。
-3. **規則的比對引擎只有一套。** `writeSelf`／`writeOther`／`dialog` 共用同一組「觸發時機 + 狀態條件 + 欄位條件」判斷，不要為新動作另寫一套比對邏輯。
+3. **規則的比對引擎只有一套。** `writeSelf`／`writeSelfBatch`／`writeOther`／`dialog` 共用同一組「觸發時機 + 狀態條件 + 欄位條件」判斷，不要為新動作另寫一套比對邏輯。
 
 ---
 
@@ -108,12 +109,13 @@ status-driven-actions-plugin/
 ├─ IT維護手冊.md              ← 本文件
 ├─ README.md                  ← 管理者說明書 + 附錄 B 技術說明
 ├─ 提醒視窗操作教學.md         ← 管理者用：提醒視窗
-├─ CLAUDE.md                  ← 開發規矩、設定 JSON 結構（匯入用）
-├─ build.ps1                  ← 一鍵打包腳本（同步 mobile.js → 改版號 → 打包）
+├─ CLAUDE.md                  ← 開發規範、設定 JSON 結構（匯入用）
+├─ build.ps1                  ← 打包腳本（改版號 → 同步 mobile.js → 檢查 → 打包）
 ├─ config-ui-preview.html     ← 設定畫面離線預覽（不在打包內容裡）
 ├─ *.ppk                      ← 簽章私鑰（機密）
 ├─ plugin*.zip                ← 打包產物（不進 git）
-├─ docs/superpowers/          ← 較大改動的設計文件（specs）與實作計畫（plans）
+├─ docs/                      ← 設計文件（specs）、實作計畫（plans）、規則範本（rule-templates）
+├─ log-app/                   ← Log App（708）用的自訂 JS，不屬於外掛，要另外上傳
 └─ contents/                  ← 真正會被打包進外掛的內容
    ├─ manifest.json           ← 版本號、各畫面載入哪些 JS
    ├─ dist/
@@ -137,11 +139,11 @@ status-driven-actions-plugin/
 
 ### 為什麼有 `mobile.js`，又為什麼要跟 `desktop.js` 一樣
 
-kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安全的做法是：**同一份程式同時註冊電腦版事件名稱（`app.record.*`）與手機版事件名稱（`mobile.app.record.*`）**，kintone 會自動忽略不屬於當前平台的那一半。所以兩個檔案內容一樣就好。
+kintone 要求電腦版與手機版各指定自己的 JS。本外掛的做法是：**同一份程式同時註冊電腦版事件名稱（`app.record.*`）與手機版事件名稱（`mobile.app.record.*`）**，kintone 會自動忽略不屬於當前平台的那一半。所以兩個檔案內容一樣就好。
 
-**後果**：只改 `desktop.js` 忘了同步 → 電腦版正常、手機版還是舊行為。這是最常見的人為失誤。`build.ps1` 打包時會自動覆蓋，但手動打包或直接上傳就不會，見 11.2。
+**後果**：只改 `desktop.js` 忘了同步 → 電腦版正常、手機版還是舊行為。這是最常見的人為失誤。`build.ps1` 打包時會自動同步並比對，手動打包就要自己記得，見 11.2。
 
-### `desktop.js` 內部分區（約 2,400 行，依行號順序）
+### `desktop.js` 內部分區（約 2,400 行，依出現順序）
 
 | 約略行號 | 區塊 | 重點函式 |
 |---|---|---|
@@ -153,7 +155,7 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 | 332–640 | **值怎麼算** | `resolveValue`（各種 `valueSource`）、`evalFormula`、`lookupAcrossApp`、日期加減 |
 | 642–750 | 欄位寫入、子表格 | `classifyWrite`、`writeToField`、`buildSubRow` |
 | 752–850 | **規則比對** | `triggerMatches`、`statusMatchesList`、`statusMatches` |
-| 856–950 | 動作執行 | `runWriteSelf`、`runDialog`、`interpolateFields` |
+| 856–970 | 動作執行 | `runWriteSelf`、`runSelfRule`（批次寫入）、`runDialog`、`interpolateFields` |
 | 951–1065 | 寫其他 App、補償寫入 | `buildOtherPayload`、`runWriteOther`、`compensationWrite` |
 | 1074–1165 | **規則總調度** | `applyRules` |
 | 1166–1300 | 畫面事件、Log 包裝 | `handleCreateShow`、`handleEditShow`、`loggedApply`、`flushSubmitLog` |
@@ -192,7 +194,7 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
   └─是→ 用 fetch + X-Cybozu-API-Token 直接打          ← 舊版相容路徑
   └─否→ 這個 App 的 Token 有加密保存（secured）？
          └─是→ kintone.plugin.app.proxy(...)           ← 目前主要路徑
-         └─否→ kintone.api(...)  用使用者自己的登入身分  ← 沒設 Token 的退路
+         └─否→ kintone.api(...)  用使用者自己的登入身分  ← 沒設 Token 時改用登入者身分
 ```
 
 **實務意義**
@@ -240,18 +242,18 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 ### 5.2 `applyRules` 做了什麼（核心，約 `desktop.js:1074`）
 
 ```
-1. 沒有規則 → 立刻結束（零成本）
+1. 沒有規則 → 立刻結束，不做任何事
 2. 篩出命中的規則：
       enabled !== false
       且 觸發時機符合（triggerMatches）
       且 狀態條件符合（statusMatches）
       欄位條件 conditions 的 AND / OR 判斷也在這一步內
 3. 分兩批：
-      selfRules  = dialog 與 writeSelf（依清單順序）
+      selfRules  = dialog、writeSelf、writeSelfBatch（依清單順序）
       otherRules = writeOther（一律排在最後）
 4. 依序跑 selfRules：
       dialog     → 跳視窗；按取消 → 設 event.error、整個中止
-      writeSelf  → 改 event.record 的欄位
+      writeSelf / writeSelfBatch → 改 event.record 的欄位
       出錯且屬於 submit / process 時機 → 記錄錯誤、擋下，不再往下
 5. 依觸發時機決定怎麼收尾（process.proceed 見 5.3；submit 類則接著跑 otherRules）
 ```
@@ -350,6 +352,8 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 | **建立人檢查全部顯示「查不到」** | 共通管理 API 權杖沒填或失效 | 設定畫面按「測試連線」 | 重新取得權杖；Scope 勾 Read 即可 |
 | **設定畫面打不開／空白** | `config.js` 發生例外 | F12 Console 的紅字 | 多半是程式改壞了；用 git 回到上一個正常版本 |
 | **規則「條件」沒生效** | 比對值差一個字、多條件是 AND、多選欄位要用「包含」 | 看 Log 有沒有命中 | README 第 8 節 |
+| **批次寫入後，使用者選擇欄位存檔報錯或沒寫進去** | 固定值填的是顯示名稱，不是登入代碼；或代碼不存在 | Log／畫面紅字有 `CB_VA01` 或指名該欄位 | 改填登入代碼（組織、群組填代碼），多個用逗號分隔 |
+| **批次寫入的子表格沒有被清空** | 子表格只支援「清空」；選了其他值來源會被略過 | Console `[sda][writeToField] 子表格「X」只支援清空` | 值來源改成「清空」；要新增列請用 Append 子表一筆 |
 | **子表格履歷只更新第一列／沒新增** | 目標欄位選到子欄位而不是子表格本身，或沒開 `historyMode` | Console `[sda] appendSubtable: ... is not a SUBTABLE` | README 第 8 節 |
 | **同一欄位被寫了兩次或值被蓋掉** | 同一個事件還有別的 App 自訂 JS 或別條規則也在改它 | 暫時停用 App 自訂 JS 對照；檢查規則清單順序 | 調整規則順序或去除重複設定 |
 
@@ -449,7 +453,7 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 
 1. 照第 11 節改程式、跑檢查清單。
 2. **先在測試 App／測試環境驗證。**
-3. 打包（見 11.3）得到 `plugin_v<版本>.zip`。
+3. 打包（見 11.3）得到 `plugin-v<版本>.zip`。
 4. 系統管理 → 外掛程式管理 → 找到「狀態驅動動作外掛」→「更新」→ 上傳 zip。
    - 必須用**同一把 `.ppk`** 簽出來的 zip。ID 一樣才會被當成「更新」，各 App 設定才會保留。
 5. 每個有用到的 App：App 設定 → 外掛程式 → 確認版本號已更新 → **更新 App**。
@@ -458,7 +462,7 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 ### 10.2 退版（新版有問題要退回）
 
 1. 改用上一版的 zip，走 10.1 的第 4、5 步。
-2. 專案資料夾裡保留了各版本的 `plugin*.zip`。**但它們不在 git 裡**（`.gitignore` 排除），只存在這個資料夾，見 10.5。
+2. 專案資料夾裡保留了各版本的 `plugin*.zip`（v1.17.5 以前檔名是 `plugin_v…`，之後是 `plugin-v…`）。**但它們不在 git 裡**（`.gitignore` 排除），只存在這個資料夾，見 10.5。
 3. kintone 是否接受版本號較低的 zip 更新，**請先在測試環境確認**再用於正式環境。
 4. 若手上沒有舊版 zip：用 `git log` 找到那版的 commit，`git checkout <commit> -- contents/`，再重新打包。
 
@@ -466,7 +470,7 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 
 ### 10.3 複製設定到別的 App
 
-設定畫面工具列的「匯出設定」／「匯入設定」。**只會帶規則與外觀，不會帶 Token、Log App 設定。** 匯入後目標 App 要自己填 Token，並確認規則用到的欄位代碼在目標 App 都存在。（原因與步驟見 README 7-2）
+設定畫面工具列的「匯出設定」／「匯入設定」。匯出是完整備份（v1.19.0 起含所有 Token 明碼，請當機密處理）；匯入時若內容含 Token，會問要「一併套用」還是「只套規則」。**複製到別的 App 請選「只套規則」**，再到目標 App 自己填 Token，並確認規則用到的欄位代碼在目標 App 都存在。（原因與步驟見 README 7-2）
 
 要用程式批次產生規則的話，JSON 格式見 [CLAUDE.md](CLAUDE.md)「設定 JSON 結構」。
 
@@ -517,11 +521,23 @@ kintone 要求電腦版與手機版各指定自己的 JS。本外掛偷懶但安
 **方法一（建議）：`build.ps1`**
 
 ```powershell
-.\build.ps1            # 同步 mobile.js，不改版號，打包
-.\build.ps1 1.18.1     # 同步 mobile.js，把版號改成 1.18.1（manifest 與 config.js 的 UI_VERSION 一起改），打包
+.uild.ps1 1.20.1          # 指定版本號
+.uild.ps1 patch           # 目前版本自動 +1（minor / major 也可以）
+.uild.ps1                 # 互動詢問版本；直接按 Enter＝沿用目前版本
+.uild.ps1 -Keep           # 不詢問，沿用目前版本
+.uild.ps1 1.20.1 -Force   # 覆蓋已經存在的同版本 zip
 ```
 
-產出 `plugin_v<版本>.zip`。它會自動找資料夾內的 `.ppk`。
+腳本會依序做：
+
+1. 把 `manifest.json` 的 `version` 與 `config.js` 的 `UI_VERSION` 改成新版本。
+2. 把 `desktop.js` 複製到 `mobile.js`，並比對兩者雜湊值確認相同。
+3. 檢查 `desktop.js`／`config.js`／`dialog.js` 語法（`node --check`），以及有沒有 `console.log` 印出 `rawConfig` 或 Token。
+4. 找資料夾裡的 `.ppk`，打包成 `plugin-v<版本>.zip`。
+
+會停下來的情況：版本格式不是 x.y.z、檢查沒過、找不到 `.ppk`、同版本 zip 已存在（要加 `-Force`）。新版本比目前低只會警告，不會停。
+
+PowerShell 擋下腳本時，改用 `powershell -ExecutionPolicy Bypass -File .uild.ps1 1.20.1`。
 
 **方法二：手動**
 
@@ -530,7 +546,7 @@ cp contents/dist/desktop.js contents/dist/mobile.js
 npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 ```
 
-> 版號有兩個地方要一致：`contents/manifest.json` 的 `version` 與 `contents/dist/config.js` 的 `UI_VERSION`（顯示在設定畫面工具列）。用 `build.ps1 <版號>` 會一起改；手動改要自己兩處都改。
+> 版號有兩個地方要一致：`contents/manifest.json` 的 `version` 與 `contents/dist/config.js` 的 `UI_VERSION`（顯示在設定畫面工具列）。`build.ps1` 會一起改；手動打包就要自己兩處都改。
 
 ### 11.4 改完的檢查清單
 
@@ -588,7 +604,7 @@ grep -n "rawConfig" contents/dist/*.js       # 目前只會看到 desktop.js / m
 ### 12.3 新增 Log 欄位
 
 1. `desktop.js` 的 `LOG_FIELDS` 與 `writeLog` 補欄位。
-2. **最小欄位退路**（`writeLog` 的第二次嘗試）不要加進新欄位。它的目的就是只用最不容易出錯的純文字欄位。
+2. **最小欄位重試**（`writeLog` 的第二次嘗試）不要加進新欄位。它的目的就是只用最不容易出錯的純文字欄位。
 3. README 第 9 節的欄位表同步更新（管理者要照表去 Log App 加欄位）。
 4. 注意：**舊的 Log App 沒有新欄位時，完整寫入會失敗並退化**。要通知所有管理者先加欄位再升版。
 
@@ -681,9 +697,11 @@ kintone 用 REST API（`/k/v1/record/status`）推進流程時，**不會送 `pr
 | 1.17.0 | 2026-09 | 建立人狀態檢查；`NXSdaUserApi` |
 | 1.17.8 | 2026-09-24 | 修正手機版 `getAppId` 回傳 `"null"` 造成 Log 數值欄位寫入失敗 |
 | 1.18.0 | 2026-09-24 | 建立人狀態檢查的顯示欄位可選所有原生欄位 |
+| 1.19.0 | 2026-10 | 子表格履歷改成點選式子欄位編輯器；匯出改為完整備份（含 Token），匯入時可選是否套用 Token |
+| 1.20.0 | 2026-10-20 | 新增「批次寫入本記錄」（`writeSelfBatch`）；使用者／組織／群組選擇可寫固定代碼；子表格可清空；`build.ps1` 加入版本詢問與打包前檢查 |
 
 > 版本日期取自 git 提交紀錄，部分版本在同一次提交內合併，日期以月份標示者為概略時間。
 
 ---
 
-*手冊內容以 v1.18.0 的程式為準。改了行為就同步更新本手冊、README 附錄 B 與 [CLAUDE.md](CLAUDE.md)，三者不一致時以程式碼為準。*
+*手冊內容以 v1.20.0 的程式為準。改了行為就同步更新本手冊、README 附錄 B 與 [CLAUDE.md](CLAUDE.md)，三者不一致時以程式碼為準。*

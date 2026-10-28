@@ -38,6 +38,92 @@
 
   Object.freeze(CONFIG);
 
+  const DBMAP = CONFIG.dbFieldMap;
+  const DBMAP_FIELDS = (DBMAP && Array.isArray(DBMAP.fields) ? DBMAP.fields : [])
+    .filter((f) => f && typeof f.code === 'string' && f.code)
+    .map((f) => Object.freeze({ code: f.code, read: f.read === true, compare: f.compare === true }));
+  const DBMAP_TRANSFORMS = (DBMAP && Array.isArray(DBMAP.transforms) ? DBMAP.transforms : [])
+    .filter((t) => t && t.enabled !== false && t.source && Array.isArray(t.cases) && t.cases.length);
+  if (DBMAP && DBMAP.enabled && (DBMAP_FIELDS.length || DBMAP_TRANSFORMS.length)) {
+    let dbmapPropsPromise = null;
+    const dbmapFormProps = () => {
+      if (!dbmapPropsPromise) {
+        dbmapPropsPromise = kintone.api(kintone.api.url('/k/v1/app/form/fields.json', true), 'GET', { app: getAppId() })
+          .then((resp) => (resp && resp.properties) || {})
+          .catch((e) => { dbmapPropsPromise = null; throw e; });
+      }
+      return dbmapPropsPromise;
+    };
+    const dbmapOptionsOf = (props) => (code) => {
+      let p = props[code];
+      if (!p) {
+        Object.keys(props).some((k) => {
+          const inner = props[k] && props[k].fields;
+          if (inner && inner[code]) { p = inner[code]; return true; }
+          return false;
+        });
+      }
+      return p && p.options ? Object.keys(p.options).map((k) => k.trim()) : null;
+    };
+    const dbmapCoerce = (value, current) => {
+      if (Array.isArray(current)) return value === '' ? [] : String(value).split(',').map((s) => s.trim()).filter(Boolean);
+      return value;
+    };
+    const applyTransforms = async (dbRecord, record) => {
+      const result = { touched: [], warnings: [], details: [] };
+      if (!DBMAP_TRANSFORMS.length || !dbRecord || !record) return result;
+      if (!window.SdaDbMap) { console.error('[sda][dbmap] dbmap.js 未載入，轉換規則略過'); return result; }
+      let props = {};
+      try { props = await dbmapFormProps(); } catch (e) { console.warn('[sda][dbmap] 讀取欄位定義失敗，下拉選項比對將視為不符：', e && e.message); }
+      const optionsOf = dbmapOptionsOf(props);
+      DBMAP_TRANSFORMS.forEach((t) => {
+        if (!(t.source in dbRecord)) {
+          console.warn(`[sda][dbmap] 主資料庫記錄沒有來源欄位「${t.source}」，轉換規則「${t.label || t.source}」略過`);
+          return;
+        }
+        const r = window.SdaDbMap.evaluate(t, dbRecord[t.source].value, optionsOf);
+        result.details.push({ label: t.label || t.source, source: t.source, raw: r.raw, value: r.value, caseIndex: r.caseIndex, set: r.set });
+        if (!r.matched) {
+          console.warn(`[sda][dbmap] 轉換規則「${t.label || t.source}」沒有符合的條件（值：${r.raw}），未寫入`);
+          return;
+        }
+        r.set.forEach(({ field, value }) => {
+          if (!record[field]) return;
+          record[field].value = dbmapCoerce(value, record[field].value);
+          if (!result.touched.includes(field)) result.touched.push(field);
+        });
+        if (r.warn) result.warnings.push(r.warn);
+      });
+      return result;
+    };
+    const dbmapAppId = String(DBMAP.dbAppId || '').trim();
+    const dbmapWriteRules = Object.freeze((CONFIG.rules || [])
+      .filter((r) => r && r.enabled !== false && r.action === 'writeOther' && dbmapAppId && String(r.targetApp || '').trim() === dbmapAppId)
+      .map((r) => Object.freeze({
+        label: String(r.label || r.id || ''),
+        writeMode: r.writeMode || 'create',
+        conditions: Object.freeze((Array.isArray(r.conditions) ? r.conditions : [])
+          .filter((c) => c && c.field)
+          .map((c) => Object.freeze({ field: c.field, op: c.op || 'eq', value: c.value == null ? '' : String(c.value) }))),
+        mappings: Object.freeze((Array.isArray(r.fieldMapping) ? r.fieldMapping : [])
+          .filter((m) => m && m.targetField)
+          .map((m) => Object.freeze({
+            targetField: m.targetField,
+            valueSource: m.valueSource || 'fixed',
+            valueParam: typeof m.valueParam === 'string' ? m.valueParam : '',
+          }))),
+      })));
+    window.NXSdaDbFieldMap = Object.freeze({
+      dbAppId: String(DBMAP.dbAppId || ''),
+      writeRules: dbmapWriteRules,
+      fields: Object.freeze(DBMAP_FIELDS),
+      read: Object.freeze(DBMAP_FIELDS.filter((f) => f.read).map((f) => f.code)),
+      compare: Object.freeze(DBMAP_FIELDS.filter((f) => f.compare).map((f) => f.code)),
+      transformTargets: Object.freeze(window.SdaDbMap ? window.SdaDbMap.targetsOf(DBMAP_TRANSFORMS) : []),
+      applyTransforms,
+    });
+  }
+
   const LOG_APP = String(CONFIG.logAppId || '').trim();
 
   const DIALOG_STYLE = CONFIG.dialogStyle || {};
@@ -136,15 +222,50 @@
     }
   };
 
+  const NATIVE_BLOCK_TEXT = '處理已中止，原因請見訊息視窗';
+  let _errorDialog = null;
+
+  const blockEvent = (event, title, text, icon) => {
+    if (!event) return;
+    if (window.SdaDialog) {
+      event.error = NATIVE_BLOCK_TEXT;
+      _errorDialog = { title, text, icon: icon || 'error' };
+    } else {
+      event.error = text;
+    }
+  };
+
+  const waitOtherSwal = async () => {
+    const S = window.Swal;
+    if (!S || typeof S.isVisible !== 'function') return;
+    while (S.isVisible()) await new Promise((r) => setTimeout(r, 200));
+  };
+
+  const flushErrorDialog = async () => {
+    const d = _errorDialog;
+    _errorDialog = null;
+    if (!d || !window.SdaDialog) return;
+    try {
+      await waitOtherSwal();
+      await window.SdaDialog.show({ icon: d.icon, title: d.title, text: d.text, confirmLabel: '確定', style: DIALOG_STYLE });
+    } catch (e) {
+      console.error('[sda] error dialog failed', e);
+    }
+  };
+
   const safeHandler = (fn) => async (event) => {
-    try { return await fn(event); }
+    _errorDialog = null;
+    let out;
+    try { out = await fn(event); }
     catch (err) {
       console.error('[sda]', err);
       if (event && event.type && /submit|process/.test(event.type)) {
-        event.error = friendlyError(err, 'Status-Driven Actions error');
+        blockEvent(event, '無法完成處理', friendlyError(err, 'Status-Driven Actions error'));
       }
-      return event;
+      out = event;
     }
+    await flushErrorDialog();
+    return out;
   };
 
   const checkEditPermission = async (recordId) => {
@@ -238,7 +359,11 @@
       rule:       ruleLabel || '',
       rawMessage: (err && err.message) || String(err),
     };
-    event.error = friendlyError(err, ruleLabel || 'Status-Driven Actions error');
+    blockEvent(
+      event,
+      ruleLabel ? `規則「${ruleLabel}」執行失敗` : '無法完成處理',
+      friendlyError(err, ruleLabel || 'Status-Driven Actions error'),
+    );
   };
 
   const postLog = (rec) =>
@@ -644,11 +769,39 @@
     if (Array.isArray(existing)) return 'arrayField';
     return 'scalar';
   };
+  const ENTITY_SELECT_TYPES = new Set(['USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT']);
+  const toEntityList = (raw) => {
+    const list = Array.isArray(raw) ? raw
+      : (raw && typeof raw === 'object') ? [raw]
+      : (raw === '' || raw == null ? [] : String(raw).split(/[,;\n，、]/));
+    return list
+      .map((x) => (x && typeof x === 'object') ? { code: String(x.code || '').trim() } : { code: String(x).trim() })
+      .filter((x) => x.code);
+  };
   const writeToField = (record, fieldCode, raw, opts = {}) => {
     const target = record[fieldCode];
     if (!target) {
       console.warn(`[sda][writeToField] ✗ field "${fieldCode}" not found in record. Available fields: ${Object.keys(record).join(', ')}`);
       return false;
+    }
+    if (target.type === 'SUBTABLE') {
+      if (raw === '' || raw == null || (Array.isArray(raw) && raw.length === 0)) {
+        initSubtableOnCreate(record, fieldCode);
+        return true;
+      }
+      console.warn(`[sda][writeToField] 子表格「${fieldCode}」只支援清空；要新增列請用 appendSubtable`);
+      return false;
+    }
+    if (ENTITY_SELECT_TYPES.has(target.type)) {
+      const next = toEntityList(raw);
+      if (opts.append && Array.isArray(target.value)) {
+        const merged = target.value.slice();
+        next.forEach((v) => { if (!merged.some((m) => m && m.code === v.code)) merged.push(v); });
+        target.value = merged;
+      } else {
+        target.value = next;
+      }
+      return true;
     }
     const existing = target.value;
     const kind = classifyWrite(existing, raw);
@@ -857,12 +1010,9 @@
     switch (rule.valueSource) {
 
       case 'readonly': {
-        if (ctx.trigger === 'index.edit.show') {
-          const f = ctx.record[rule.targetField];
-          if (f) f.disabled = true;
-          return;
-        }
-        if (/\.show$/.test(ctx.trigger)) setFieldShown(rule.targetField, false);
+        if (!/\.show$/.test(ctx.trigger)) return;
+        const f = ctx.record[rule.targetField];
+        if (f) f.disabled = true;
         return;
       }
 
@@ -910,6 +1060,20 @@
         return;
       }
     }
+  };
+
+  const runSelfRule = async (rule, ctx) => {
+    if (rule.action !== 'writeSelfBatch') {
+      await runWriteSelf(rule, ctx);
+      return rule.targetField ? [rule.targetField] : [];
+    }
+    const touched = [];
+    for (const item of (Array.isArray(rule.items) ? rule.items : [])) {
+      if (!item || !item.targetField) continue;
+      await runWriteSelf({ ...item, valueSource: item.valueSource || 'clear' }, ctx);
+      if (item.valueSource !== 'readonly') touched.push(item.targetField);
+    }
+    return touched;
   };
 
   const CANCEL_MESSAGE_DEFAULT = '已取消操作。';
@@ -1108,8 +1272,7 @@
           }
           continue;
         }
-        await runWriteSelf(rule, ctx);
-        if (rule.targetField && rule.action !== 'writeOther') touchedFields.push(rule.targetField);
+        touchedFields.push(...await runSelfRule(rule, ctx));
       } catch (e) {
         console.error(`[sda] rule "${rule.label || rule.id}" failed`, e);
         if (/submit|process/.test(trigger)) { recordError(event, e, rule.label || rule.id); return event; }
@@ -1220,6 +1383,13 @@
   };
 
   const loggedApply = (trigger) => async (ev) => {
+    _errorDialog = null;
+    const out = await loggedApplyCore(trigger, ev);
+    await flushErrorDialog();
+    return out;
+  };
+
+  const loggedApplyCore = async (trigger, ev) => {
     _runInfo = { matched: 0, labels: [] };
     switch (trigger) {
       case 'create.submit':
@@ -1340,8 +1510,7 @@
     for (const rule of selfRules) {
 
       if (rule.action === 'dialog') { await runDialog(rule, { ...ctx, noBlock: true }); continue; }
-      await runWriteSelf(rule, ctx);
-      if (rule.targetField) touchedFields.push(rule.targetField);
+      touchedFields.push(...await runSelfRule(rule, ctx));
     }
 
     let written = false;
@@ -1388,8 +1557,7 @@
       const touchedFields = [];
       for (const rule of selfRules) {
         if (rule.action === 'dialog') { await runDialog(rule, ctx); continue; }
-        await runWriteSelf(rule, ctx);
-        if (rule.targetField) touchedFields.push(rule.targetField);
+        touchedFields.push(...await runSelfRule(rule, ctx));
       }
       const uniqueFields = [...new Set(touchedFields)];
       if (uniqueFields.length > 0) {

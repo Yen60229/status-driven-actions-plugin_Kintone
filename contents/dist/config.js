@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.19.0';
+  const UI_VERSION = '1.21.1';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -33,6 +33,19 @@
   ['users', 'organizations', 'groups'].forEach((k) => {
     if (!Array.isArray(state.creatorCheck.visibility[k])) state.creatorCheck.visibility[k] = [];
   });
+
+  const DBMAP_FLAGS = [
+    { k: 'read', l: '從資料庫帶回' },
+    { k: 'compare', l: '差異比對' },
+  ];
+  const DBMAP_EXCLUDED_TYPES = new Set([
+    'RECORD_NUMBER', '__ID__', '__REVISION__', 'CREATOR', 'CREATED_TIME', 'MODIFIER', 'UPDATED_TIME',
+    'STATUS', 'STATUS_ASSIGNEE', 'CATEGORY', 'FILE', 'REFERENCE_TABLE', 'GROUP', 'LABEL', 'SPACER', 'HR',
+  ]);
+  const DEFAULT_DBMAP = { enabled: false, dbAppId: '', fields: [], transforms: [] };
+  state.dbFieldMap = Object.assign({}, DEFAULT_DBMAP, state.dbFieldMap || {});
+  if (!Array.isArray(state.dbFieldMap.fields)) state.dbFieldMap.fields = [];
+  if (!Array.isArray(state.dbFieldMap.transforms)) state.dbFieldMap.transforms = [];
 
   const DEFAULT_DIALOG_STYLE = (window.SdaDialog && window.SdaDialog.DEFAULT_STYLE) || {
     fontSize: 14, lineHeight: 1.9, titleSize: 20, radius: 12,
@@ -135,7 +148,7 @@
     { v: 'currentStatus',  l: '當前狀態' },
     { v: 'actionName',     l: '流程動作名稱' },
     { v: 'clear',          l: '清空' },
-    { v: 'readonly',       l: '唯讀鎖定（限 *.show；index.edit.show 顯示但不可編輯，其餘 *.show 直接隱藏）' },
+    { v: 'readonly',       l: '唯讀鎖定（限 *.show；欄位照常顯示但變灰不可編輯）' },
     { v: 'appendSubtable', l: 'Append 子表一筆 [參數: JSON]' },
     { v: 'appendText',     l: '文字串接追加（去重，可設分隔字元）[參數: JSON]' },
     { v: 'copyAttachment', l: '附件檔案複製（限存檔後 submit.success）[參數: JSON]' },
@@ -163,6 +176,10 @@
     { v: 'appendText',     l: '文字串接追加（去重）' },
     { v: 'copyAttachment', l: '附件檔案複製（限存檔後 submit.success）' },
   ];
+
+  const BATCH_VALUE_SOURCES = [{ v: 'clear', l: '清空' }]
+    .concat(MAPPING_VALUE_SOURCES.filter((o) => !['clear', 'appendText', 'copyAttachment'].includes(o.v)))
+    .concat([{ v: 'readonly', l: '唯讀鎖定（限 *.show）' }]);
 
   const SUB_VALUE_SOURCES = MAPPING_VALUE_SOURCES
     .filter((o) => !['appendText', 'copyAttachment'].includes(o.v))
@@ -194,6 +211,7 @@
     valueParam: '',
     skipIfFilled: false,
     appendMode: false,
+    items: [],
     writeMode: 'upsert',
     targetApp: '',
     keyMapping: [],
@@ -203,6 +221,7 @@
 
   const ACTIONS = [
     { v: 'writeSelf',  l: '寫入本記錄欄位' },
+    { v: 'writeSelfBatch', l: '批次寫入本記錄（一次設定多個欄位：清空／固定值…）' },
     { v: 'writeOther', l: '寫入其他 App 記錄' },
     { v: 'dialog',     l: '跳出提醒視窗（按確定後才繼續）' },
   ];
@@ -485,12 +504,14 @@
   ];
   const CC_NON_COLUMN_TYPES = new Set(['LABEL', 'SPACER', 'HR', 'GROUP', 'REFERENCE_TABLE']);
   let CC_FIELD_OPTIONS = null;
+  let FORM_PROPS = null;
   const SUBTABLE_FIELDS = {};
   const SUBTABLE_OPTIONS = [{ v: '', l: '— 請選擇子表格 —' }];
   const loadCcFields = () =>
     kintone.api(kintone.api.url('/k/v1/preview/app/form/fields.json', true), 'GET', { app: APP_ID })
       .then((resp) => {
         const props = (resp && resp.properties) || {};
+        FORM_PROPS = props;
         Object.keys(props).forEach((code) => {
           const p = props[code];
           if (!p || p.type !== 'SUBTABLE') return;
@@ -568,6 +589,7 @@
     root.appendChild(renderLogSection());
     root.appendChild(renderDialogStyleSection());
     root.appendChild(renderCreatorCheckSection());
+    root.appendChild(renderDbMapSection());
   };
 
   const notify = (opts) => {
@@ -1082,6 +1104,401 @@
     return sec;
   };
 
+  const DBMAP_DB = { appId: '', status: 'idle', props: null, error: '' };
+  const ensureDbMapFields = (force) => {
+    const id = String(state.dbFieldMap.dbAppId || '').trim();
+    if (!id) return;
+    if (!force && DBMAP_DB.appId === id && DBMAP_DB.status !== 'idle') return;
+    Object.assign(DBMAP_DB, { appId: id, status: 'loading', props: null, error: '' });
+    kintone.api(kintone.api.url('/k/v1/app/form/fields.json', true), 'GET', { app: id })
+      .then((resp) => {
+        if (DBMAP_DB.appId !== id) return;
+        DBMAP_DB.status = 'done';
+        DBMAP_DB.props = (resp && resp.properties) || {};
+        render();
+      })
+      .catch((e) => {
+        if (DBMAP_DB.appId !== id) return;
+        DBMAP_DB.status = 'error';
+        DBMAP_DB.error = (e && e.message) || String(e);
+        render();
+      });
+  };
+
+  const dbmapAnyOn = (r) => DBMAP_FLAGS.some((f) => r[f.k] === true);
+
+  const buildDbMapRows = (formProps, dbProps, savedFields) => {
+    const saved = new Map();
+    (savedFields || []).forEach((f) => { if (f && f.code) saved.set(f.code, f); });
+    const rows = [];
+    Object.keys(formProps || {}).forEach((code) => {
+      const ff = formProps[code];
+      if (!ff || DBMAP_EXCLUDED_TYPES.has(ff.type)) return;
+      const df = dbProps && dbProps[code];
+      if (!df || DBMAP_EXCLUDED_TYPES.has(df.type)) return;
+      const s = saved.get(code) || {};
+      const row = { code, label: ff.label || code, formType: ff.type, dbType: df.type, valid: true, warnings: [] };
+      DBMAP_FLAGS.forEach(({ k }) => { row[k] = s[k] === true; });
+      if (ff.type !== df.type) row.warnings.push(`型別不同：本 App ${ff.type}／主資料庫 ${df.type}`);
+      if (ff.type === 'SUBTABLE' && df.type === 'SUBTABLE') {
+        const fIn = Object.keys(ff.fields || {});
+        const dIn = Object.keys(df.fields || {});
+        const missDb = fIn.filter((c) => !dIn.includes(c));
+        const missForm = dIn.filter((c) => !fIn.includes(c));
+        if (missDb.length) row.warnings.push(`子表格內「${missDb.join('、')}」主資料庫沒有`);
+        if (missForm.length) row.warnings.push(`子表格內「${missForm.join('、')}」本 App 沒有`);
+      }
+      rows.push(row);
+      saved.delete(code);
+    });
+    saved.forEach((s, code) => {
+      if (!dbmapAnyOn(s)) return;
+      const inForm = !!(formProps && formProps[code]);
+      const inDb = !!(dbProps && dbProps[code]);
+      const reason = !inForm && !inDb ? '本 App 與主資料庫都查無此欄位'
+        : !inForm ? '本 App 查無此欄位' : !inDb ? '主資料庫查無此欄位' : '此欄位型別不能對照';
+      const row = {
+        code, label: (formProps && formProps[code] && formProps[code].label) || code,
+        formType: '', dbType: '', valid: false, warnings: [`${reason}，儲存時將移除`],
+      };
+      DBMAP_FLAGS.forEach(({ k }) => { row[k] = s[k] === true; });
+      rows.push(row);
+    });
+    const order = new Map((savedFields || []).map((f, i) => [f && f.code, i]));
+    rows.sort((a, b) => {
+      if (a.valid !== b.valid) return a.valid ? 1 : -1;
+      if (dbmapAnyOn(a) !== dbmapAnyOn(b)) return dbmapAnyOn(a) ? -1 : 1;
+      const oa = order.has(a.code) ? order.get(a.code) : Infinity;
+      const ob = order.has(b.code) ? order.get(b.code) : Infinity;
+      if (oa !== ob) return oa - ob;
+      return a.label.localeCompare(b.label, 'zh-Hant');
+    });
+    return rows;
+  };
+
+  const dbmapToFields = (list) => list
+    .filter((r) => r && r.code && dbmapAnyOn(r))
+    .map((r) => ({ code: r.code, read: r.read === true, compare: r.compare === true }));
+
+  const dbmapFieldsForSave = () => {
+    const m = state.dbFieldMap;
+    if (DBMAP_DB.status === 'done' && FORM_PROPS && DBMAP_DB.appId === String(m.dbAppId || '').trim()) {
+      return dbmapToFields(buildDbMapRows(FORM_PROPS, DBMAP_DB.props, m.fields).filter((r) => r.valid));
+    }
+    return dbmapToFields(m.fields || []);
+  };
+
+  const DBMAP_OPTION_TYPES = new Set(['DROP_DOWN', 'RADIO_BUTTON', 'CHECK_BOX', 'MULTI_SELECT']);
+  const dbmapNewCase = (type) => ({ type: type || 'equals', field: '', text: '', pattern: '', sets: [{ field: '', value: '' }], warn: '' });
+  const dbmapNewTransform = () => ({
+    id: `t-${Date.now()}`, enabled: true, label: '', source: '',
+    normalize: { fullwidth: false, trim: true, removeSpaces: false, replaces: [] },
+    cases: [dbmapNewCase('equals')],
+  });
+  const dbmapOptionsOfForm = (code) => {
+    let p = FORM_PROPS && FORM_PROPS[code];
+    if (!p && FORM_PROPS) {
+      Object.keys(FORM_PROPS).some((k) => {
+        const inner = FORM_PROPS[k] && FORM_PROPS[k].fields;
+        if (inner && inner[code]) { p = inner[code]; return true; }
+        return false;
+      });
+    }
+    return p && p.options ? Object.keys(p.options).map((k) => k.trim()) : null;
+  };
+  const dbmapCleanTransform = (t) => {
+    const o = JSON.parse(JSON.stringify(t || {}));
+    o.normalize = Object.assign({ fullwidth: false, trim: true, removeSpaces: false, replaces: [] }, o.normalize || {});
+    o.normalize.replaces = (o.normalize.replaces || []).filter((r) => r && r.pattern);
+    o.cases = (o.cases || []).map((c) => Object.assign({}, c, { sets: (c.sets || []).filter((x) => x && x.field) }));
+    return o;
+  };
+
+  const renderDbMapTransforms = (sec) => {
+    const m = state.dbFieldMap;
+    if (!Array.isArray(m.transforms)) m.transforms = [];
+    const formOpts = [{ v: '', l: '— 請選擇 —' }].concat(Object.keys(FORM_PROPS || {})
+      .filter((c) => FORM_PROPS[c] && !DBMAP_EXCLUDED_TYPES.has(FORM_PROPS[c].type) && FORM_PROPS[c].type !== 'SUBTABLE')
+      .map((c) => ({ v: c, l: `${FORM_PROPS[c].label || c} (${c}) [${FORM_PROPS[c].type}]` })));
+    const optionFieldOpts = [{ v: '', l: '— 請選擇 —' }].concat(Object.keys(FORM_PROPS || {})
+      .filter((c) => FORM_PROPS[c] && DBMAP_OPTION_TYPES.has(FORM_PROPS[c].type))
+      .map((c) => ({ v: c, l: `${FORM_PROPS[c].label || c} (${c}) [${FORM_PROPS[c].type}]` })));
+    const dbOpts = [{ v: '', l: '— 請選擇 —' }].concat(Object.keys(DBMAP_DB.props || {})
+      .filter((c) => DBMAP_DB.props[c] && !DBMAP_EXCLUDED_TYPES.has(DBMAP_DB.props[c].type))
+      .map((c) => ({ v: c, l: `${DBMAP_DB.props[c].label || c} (${c}) [${DBMAP_DB.props[c].type}]` })));
+
+    sec.appendChild(el('h4', { style: { margin: '22px 0 6px', fontSize: '15px' } }, ['轉換規則（帶回時把主資料庫一個欄位，依條件拆寫到本 App 多個欄位）']));
+    sec.appendChild(el('p', { class: 'sda-section-help' }, [
+      '條件由上而下比對，第一個符合的條件生效。寫入值可用 {value}（前處理後的值）、{raw}（原始值）、$1～$9（正規式群組）。'
+      + '寫入下拉／選項欄位時，若值不是該欄位的選項，該條件視為不符，改試下一個條件。'
+      + '本 App 的欄位只要被任一轉換規則寫入，就不再由上表「從資料庫帶回」直接複製。'
+    ]));
+
+    const smallBtn = (label, onclick, extra) => el('button', Object.assign({ class: 'sda-btn', style: { padding: '2px 8px', fontSize: '12px' }, onclick }, extra || {}), [label]);
+    const move = (arr, i, d) => { const j = i + d; if (j < 0 || j >= arr.length) return; [arr[i], arr[j]] = [arr[j], arr[i]]; render(); };
+
+    m.transforms.forEach((t, ti) => {
+      t.normalize = Object.assign({ fullwidth: false, trim: true, removeSpaces: false, replaces: [] }, t.normalize || {});
+      if (!Array.isArray(t.normalize.replaces)) t.normalize.replaces = [];
+      if (!Array.isArray(t.cases)) t.cases = [];
+      const card = el('div', { class: `sda-rule-card${t.enabled === false ? ' is-disabled' : ''}`, style: { marginBottom: '14px' } });
+
+      const errs = window.SdaDbMap ? window.SdaDbMap.validateTransform(dbmapCleanTransform(t)) : [];
+      card.appendChild(el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '10px' } }, [
+        el('strong', {}, [`轉換 #${ti + 1}`]),
+        checkbox(t.enabled !== false, (v) => { t.enabled = v; render(); }, '啟用'),
+        Object.assign(textInput(t.label, (v) => { t.label = v; }, '名稱（例：支付條件反推）'), { style: 'width:260px' }),
+        el('span', { style: { flex: '1' } }),
+        smallBtn('↑', () => move(m.transforms, ti, -1)),
+        smallBtn('↓', () => move(m.transforms, ti, 1)),
+        smallBtn('複製 JSON', () => openTextModal({ title: '轉換規則 JSON（可貼到其他 App 的「貼上 JSON 新增」）', value: JSON.stringify(dbmapCleanTransform(t), null, 2), readonly: true })),
+        smallBtn('刪除', async () => {
+          if (!(await askConfirm({ icon: 'warn', title: '刪除轉換規則', text: `確定刪除「${t.label || t.source || `轉換 #${ti + 1}`}」？` }))) return;
+          m.transforms.splice(ti, 1); render();
+        }, { class: 'sda-btn sda-btn-danger' }),
+      ]));
+      if (errs.length && t.enabled !== false) card.appendChild(el('p', { class: 'sda-error' }, [errs.join('／')]));
+
+      const grid = el('div', { class: 'sda-rule-grid' });
+      const addRow = (label, control) => { grid.appendChild(el('div', { class: 'sda-row-label' }, [label])); grid.appendChild(control); };
+      addRow('來源（主資料庫欄位）', fieldCombo(dbOpts, t.source, (v) => { t.source = v; render(); }));
+
+      const nz = t.normalize;
+      const normBox = el('div', {}, [
+        el('div', { style: { display: 'flex', gap: '14px', flexWrap: 'wrap' } }, [
+          checkbox(nz.fullwidth, (v) => { nz.fullwidth = v; }, '全形英數轉半形'),
+          checkbox(nz.trim !== false, (v) => { nz.trim = v; }, '去除前後空白'),
+          checkbox(nz.removeSpaces, (v) => { nz.removeSpaces = v; }, '去除所有空白'),
+        ]),
+      ]);
+      nz.replaces.forEach((r, ri) => {
+        normBox.appendChild(el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px' } }, [
+          el('span', { style: { fontSize: '12px', color: '#6b7480' } }, ['取代（正規式）']),
+          Object.assign(textInput(r.pattern, (v) => { r.pattern = v; }, '例：^月結(\\d+)日$'), { style: 'width:220px' }),
+          el('span', {}, ['→']),
+          Object.assign(textInput(r.replace, (v) => { r.replace = v; }, '例：月結$1天'), { style: 'width:160px' }),
+          smallBtn('刪除', () => { nz.replaces.splice(ri, 1); render(); }),
+        ]));
+      });
+      normBox.appendChild(el('div', { style: { marginTop: '6px' } }, [smallBtn('＋ 取代規則', () => { nz.replaces.push({ pattern: '', replace: '' }); render(); })]));
+      addRow('前處理', normBox);
+
+      const casesBox = el('div', {});
+      t.cases.forEach((c, ci) => {
+        if (!Array.isArray(c.sets)) c.sets = [];
+        const box = el('div', { style: { border: '1px solid #e3e7eb', borderRadius: '6px', padding: '8px 10px', marginBottom: '8px', background: '#fafbfc' } });
+        const param = (() => {
+          if (c.type === 'option') return fieldCombo(optionFieldOpts, c.field, (v) => { c.field = v; });
+          if (c.type === 'equals' || c.type === 'contains') return Object.assign(textInput(c.text, (v) => { c.text = v; }, '比對文字'), { style: 'width:220px' });
+          if (c.type === 'regex') return Object.assign(textInput(c.pattern, (v) => { c.pattern = v; }, '例：^月結(\\d+)天$'), { style: 'width:260px' });
+          return el('span', {});
+        })();
+        box.appendChild(el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } }, [
+          el('strong', { style: { fontSize: '13px' } }, [`條件 ${ci + 1}`]),
+          select(window.SdaDbMap ? window.SdaDbMap.CASE_TYPES : [], c.type, (v) => { c.type = v; render(); }, { style: { width: '220px', flex: '0 0 auto' } }),
+          el('div', { style: { minWidth: '220px' } }, [param]),
+          el('span', { style: { flex: '1' } }),
+          smallBtn('↑', () => move(t.cases, ci, -1)),
+          smallBtn('↓', () => move(t.cases, ci, 1)),
+          smallBtn('刪除', () => { t.cases.splice(ci, 1); render(); }),
+        ]));
+        c.sets.forEach((x, xi) => {
+          box.appendChild(el('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '6px', paddingLeft: '16px' } }, [
+            el('span', { style: { fontSize: '12px', color: '#6b7480', whiteSpace: 'nowrap' } }, ['寫入']),
+            el('div', { style: { width: '320px' } }, [fieldCombo(formOpts, x.field, (v) => { x.field = v; })]),
+            el('span', {}, ['＝']),
+            Object.assign(textInput(x.value, (v) => { x.value = v; }, '值，例：{value}、其他、$1（留空＝清空）'), { style: 'width:240px' }),
+            smallBtn('刪除', () => { c.sets.splice(xi, 1); render(); }),
+          ]));
+        });
+        box.appendChild(el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', marginTop: '6px', paddingLeft: '16px', flexWrap: 'wrap' } }, [
+          smallBtn('＋ 寫入欄位', () => { c.sets.push({ field: '', value: '' }); render(); }),
+          el('span', { style: { fontSize: '12px', color: '#6b7480' } }, ['提醒訊息（選填，帶入後提示使用者）']),
+          Object.assign(textInput(c.warn, (v) => { c.warn = v; }, '例：主資料庫的「{raw}」格式不符，請確認'), { style: 'width:360px' }),
+        ]));
+        casesBox.appendChild(box);
+      });
+      casesBox.appendChild(smallBtn('＋ 條件', () => { t.cases.push(dbmapNewCase('equals')); render(); }));
+      addRow('條件（由上而下）', casesBox);
+
+      const testIn = el('input', { type: 'text', placeholder: '輸入一個主資料庫的值試算', style: { width: '260px' } });
+      const testOut = el('pre', { style: { margin: '6px 0 0', fontSize: '12px', whiteSpace: 'pre-wrap', color: '#2c3e50' } });
+      const runTest = () => {
+        if (!window.SdaDbMap) { testOut.textContent = 'dbmap.js 未載入'; return; }
+        const r = window.SdaDbMap.evaluate(dbmapCleanTransform(t), testIn.value, dbmapOptionsOfForm);
+        if (!r.matched) { testOut.textContent = `前處理後：「${r.value}」\n→ 沒有符合的條件，不會寫入任何欄位`; return; }
+        testOut.textContent = `前處理後：「${r.value}」\n→ 符合 條件 ${r.caseIndex + 1}\n`
+          + r.set.map((x) => `　${x.field} ＝ 「${x.value}」`).join('\n')
+          + (r.warn ? `\n提醒：${r.warn}` : '');
+      };
+      addRow('試算', el('div', {}, [el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center' } }, [testIn, smallBtn('試算', runTest)]), testOut]));
+
+      card.appendChild(grid);
+      sec.appendChild(card);
+    });
+
+    sec.appendChild(el('div', { style: { display: 'flex', gap: '8px' } }, [
+      el('button', { class: 'sda-btn', onclick: () => { m.transforms.push(dbmapNewTransform()); render(); } }, ['＋ 新增轉換規則']),
+      el('button', {
+        class: 'sda-btn',
+        onclick: () => openTextModal({
+          title: '貼上轉換規則 JSON（單一規則物件，或規則陣列）',
+          value: '', confirmLabel: '新增',
+          onConfirm: async (text) => {
+            let parsed;
+            try { parsed = JSON.parse(text); } catch (e) {
+              await notify({ icon: 'error', title: '格式錯誤', text: `JSON 格式錯誤：${e.message}` });
+              return false;
+            }
+            const list = (Array.isArray(parsed) ? parsed : [parsed]).filter((x) => x && typeof x === 'object');
+            if (!list.length) { await notify({ icon: 'error', title: '沒有可新增的規則', text: '請貼上轉換規則物件。' }); return false; }
+            list.forEach((x, i) => m.transforms.push(Object.assign(dbmapNewTransform(), x, { id: `t-${Date.now()}-${i}` })));
+            render();
+            return true;
+          },
+        }),
+      }, ['貼上 JSON 新增']),
+    ]));
+  };
+
+  const renderDbMapSection = () => {
+    const m = state.dbFieldMap;
+    const sec = el('section', { class: 'sda-section' });
+    sec.appendChild(el('h3', { class: 'sda-section-title' }, ['6. 主資料庫欄位對照（選填）']));
+    sec.appendChild(el('p', { class: 'sda-section-help' }, [
+      '指定本 App 與一個「主資料庫 App」之間，哪些欄位要「從資料庫帶回」、哪些要「差異比對」。'
+      + '外掛本身不據此寫入任何資料，而是提供給本 App 的自訂 JS 讀取（window.NXSdaDbFieldMap）。'
+      + '只列出兩邊都存在、欄位代碼相同的欄位；附件與系統欄位不列出。'
+    ]));
+
+    sec.appendChild(checkbox(m.enabled, (v) => { m.enabled = v; render(); }, '啟用'));
+
+    if (!m.enabled) {
+      sec.appendChild(el('p', { class: 'sda-section-help', style: { marginTop: '10px' } }, [
+        '未啟用：不提供 window.NXSdaDbFieldMap，自訂 JS 依其程式內建清單運作。'
+      ]));
+      return sec;
+    }
+
+    const appInput = el('input', { type: 'number', min: '1', style: { width: '120px' } });
+    appInput.value = m.dbAppId || '';
+    appInput.addEventListener('change', (e) => { m.dbAppId = String(e.target.value || '').trim(); render(); });
+    sec.appendChild(el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', margin: '12px 0' } }, [
+      el('span', {}, ['主資料庫 App ID']),
+      appInput,
+      el('button', { class: 'sda-btn', onclick: () => { ensureDbMapFields(true); render(); } }, ['重新讀取欄位']),
+    ]));
+
+    if (!String(m.dbAppId || '').trim()) {
+      sec.appendChild(el('p', { class: 'sda-error' }, ['請輸入主資料庫 App ID。']));
+      return sec;
+    }
+    ensureDbMapFields(false);
+    if (DBMAP_DB.status === 'loading' || DBMAP_DB.status === 'idle') {
+      sec.appendChild(el('p', { class: 'sda-section-help' }, ['讀取主資料庫欄位中…']));
+      return sec;
+    }
+    if (DBMAP_DB.status === 'error') {
+      sec.appendChild(el('p', { class: 'sda-error' }, [`讀取主資料庫（App ${DBMAP_DB.appId}）欄位失敗：${DBMAP_DB.error}。請確認 App ID 正確且您有檢視權限。`]));
+      return sec;
+    }
+    if (!FORM_PROPS) {
+      sec.appendChild(el('p', { class: 'sda-error' }, ['讀取本 App 欄位失敗，請重新整理設定畫面。']));
+      return sec;
+    }
+
+    const rows = buildDbMapRows(FORM_PROPS, DBMAP_DB.props, m.fields);
+    const sync = () => { m.fields = dbmapToFields(rows); };
+    const invalid = rows.filter((r) => !r.valid);
+    if (invalid.length) {
+      sec.appendChild(el('p', { class: 'sda-error' }, [`有 ${invalid.length} 個已設定的欄位目前無法對照（紅色列），儲存時會移除。`]));
+    }
+
+    let q = '';
+    let filter = 'all';
+    const search = el('input', { type: 'search', placeholder: '🔍 搜尋欄位名稱／代碼', style: { width: '240px' } });
+    search.addEventListener('input', (e) => { q = e.target.value.trim().toLowerCase(); draw(); });
+    const filterSel = select([
+      { v: 'all', l: '全部欄位' }, { v: 'checked', l: '已勾選任一項' },
+      { v: 'unchecked', l: '完全未勾選' }, { v: 'warn', l: '有提醒' },
+    ], filter, (v) => { filter = v; draw(); });
+    const count = el('span', { style: { fontSize: '12px', color: '#6b7480' } });
+    sec.appendChild(el('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap', marginBottom: '8px' } }, [search, filterSel, count]));
+
+    const visible = () => rows.filter((r) => {
+      if (q && !r.label.toLowerCase().includes(q) && !r.code.toLowerCase().includes(q)) return false;
+      if (filter === 'checked' && !dbmapAnyOn(r)) return false;
+      if (filter === 'unchecked' && dbmapAnyOn(r)) return false;
+      if (filter === 'warn' && r.valid && !r.warnings.length) return false;
+      return true;
+    });
+
+    const nowrap = { whiteSpace: 'nowrap' };
+    const headBoxes = {};
+    const headRow = el('tr', {}, [el('th', { style: nowrap }, ['欄位名稱']), el('th', { style: nowrap }, ['欄位代碼']), el('th', { style: nowrap }, ['型別'])]);
+    DBMAP_FLAGS.forEach(({ k, l }) => {
+      const cb = el('input', { type: 'checkbox', title: `目前列出的欄位全部${l}` });
+      cb.addEventListener('change', () => {
+        visible().forEach((r) => { if (r.valid) r[k] = cb.checked; });
+        sync();
+        draw();
+      });
+      headBoxes[k] = cb;
+      headRow.appendChild(el('th', { style: { textAlign: 'center', whiteSpace: 'nowrap' } }, [el('label', {}, [cb, ` ${l}`])]));
+    });
+    headRow.appendChild(el('th', { style: { minWidth: '220px' } }, ['提醒']));
+
+    const tbody = el('tbody');
+    const refreshMeta = () => {
+      const valid = rows.filter((r) => r.valid);
+      const n = (k) => valid.filter((r) => r[k]).length;
+      count.textContent = `可對照 ${valid.length} 欄｜帶回 ${n('read')}・比對 ${n('compare')}`;
+      const list = visible().filter((r) => r.valid);
+      DBMAP_FLAGS.forEach(({ k }) => {
+        const on = list.filter((r) => r[k]).length;
+        headBoxes[k].checked = list.length > 0 && on === list.length;
+        headBoxes[k].indeterminate = on > 0 && on < list.length;
+      });
+    };
+    const draw = () => {
+      tbody.innerHTML = '';
+      const list = visible();
+      if (!list.length) {
+        tbody.appendChild(el('tr', {}, [el('td', { colspan: String(4 + DBMAP_FLAGS.length), style: { textAlign: 'center', color: '#6b7480' } }, [rows.length ? '沒有符合條件的欄位' : '查無兩邊都有的欄位'])]));
+      }
+      list.forEach((r) => {
+        const tr = el('tr', { style: r.valid ? {} : { background: '#fdecea', color: '#a12622' } }, [
+          el('td', { style: nowrap }, [r.label]),
+          el('td', { style: { fontFamily: 'Consolas, monospace', fontSize: '12px', whiteSpace: 'nowrap' } }, [r.code]),
+          el('td', { style: { fontSize: '12px', color: '#6b7480', whiteSpace: 'nowrap' } }, [r.formType === r.dbType ? r.formType : `${r.formType} → ${r.dbType}`]),
+        ]);
+        DBMAP_FLAGS.forEach(({ k, l }) => {
+          const cb = el('input', { type: 'checkbox', title: `${r.label} ${l}` });
+          cb.checked = !!r[k];
+          if (!r.valid) cb.disabled = true;
+          cb.addEventListener('change', () => { r[k] = cb.checked; sync(); refreshMeta(); });
+          tr.appendChild(el('td', { style: { textAlign: 'center' } }, [cb]));
+        });
+        const tags = el('td', { style: { fontSize: '12px' } });
+        r.warnings.forEach((t) => tags.appendChild(el('div', { style: { color: r.valid ? '#b9770e' : '#a12622' } }, [`⚠ ${t}`])));
+        tr.appendChild(tags);
+        tbody.appendChild(tr);
+      });
+      refreshMeta();
+    };
+
+    const table = el('table', { class: 'sda-table' }, [el('thead', {}, [headRow]), tbody]);
+    sec.appendChild(el('div', { style: { maxHeight: '60vh', overflow: 'auto', border: '1px solid #e3e7eb', borderRadius: '6px' } }, [table]));
+    draw();
+
+    sec.appendChild(el('p', { class: 'sda-section-help', style: { marginTop: '12px' } }, [
+      '從資料庫帶回：自訂 JS 從主資料庫取值帶回本 App 的欄位。差異比對：自訂 JS 標示本 App 與主資料庫不同的欄位。'
+      + '寫入主資料庫請用第 2 區「寫入其他 App」規則依條件設定。'
+    ]));
+    renderDbMapTransforms(sec);
+    return sec;
+  };
+
   const renderTokensSection = () => {
     const sec = el('section', { class: 'sda-section' });
     sec.appendChild(el('h3', { class: 'sda-section-title' }, ['1. API Token 設定']));
@@ -1310,6 +1727,79 @@
     return wrap;
   };
 
+  const ENTITY_SELECT_TYPES = new Set(['USER_SELECT', 'ORGANIZATION_SELECT', 'GROUP_SELECT']);
+  const batchTargetOptions = () => {
+    const seen = new Set();
+    return FIELD_OPTIONS.concat(SUBTABLE_OPTIONS.filter((o) => o.v)).filter((o) => {
+      if (seen.has(o.v)) return false;
+      seen.add(o.v);
+      return true;
+    });
+  };
+
+  const renderBatchEditor = (r) => {
+    if (!Array.isArray(r.items)) r.items = [];
+    const wrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '6px' } });
+    const opts = batchTargetOptions();
+
+    r.items.forEach((it, ii) => {
+      const type = FIELD_TYPES[it.targetField];
+      const row = el('div', { class: 'sda-mapping-row' });
+      row.appendChild(fieldCombo(opts, it.targetField, (v) => { r.items[ii].targetField = v; render(); }));
+      row.appendChild(el('span', { class: 'sda-arrow' }, ['⇐']));
+      const srcWrap = el('div', { style: { display: 'flex', flexDirection: 'column', gap: '4px', minWidth: '0' } });
+      srcWrap.appendChild(select(BATCH_VALUE_SOURCES, it.valueSource || 'clear', (v) => {
+        r.items[ii].valueSource = v;
+        r.items[ii].valueParam = '';
+        render();
+      }));
+      if (it.valueSource === 'fixed' && ENTITY_SELECT_TYPES.has(type)) {
+        srcWrap.appendChild(textInput(typeof it.valueParam === 'string' ? it.valueParam : '', (v) => { it.valueParam = v; },
+          type === 'USER_SELECT' ? '登入帳號代碼，多個用逗號，例 user01,user02' : '代碼，多個用逗號'));
+      } else if ((it.valueSource || 'clear') !== 'clear') {
+        srcWrap.appendChild(mappingParamControl(it));
+      }
+      if (type === 'SUBTABLE' && (it.valueSource || 'clear') !== 'clear' && it.valueSource !== 'readonly') {
+        srcWrap.appendChild(el('span', { class: 'sda-error', style: { fontSize: '11px' } }, ['⚠ 子表格只支援「清空」（留一列空白列）或「唯讀鎖定」']));
+      }
+      if (it.valueSource !== 'readonly') {
+        srcWrap.appendChild(checkbox(it.skipIfFilled, (v) => { it.skipIfFilled = v; }, '僅在空白時才寫入'));
+      }
+      row.appendChild(srcWrap);
+      row.appendChild(el('button', { class: 'sda-btn-row', onclick: () => { r.items.splice(ii, 1); render(); } }, ['✕']));
+      wrap.appendChild(row);
+    });
+
+    const btnRow = el('div', { style: { display: 'flex', gap: '8px', marginTop: '2px' } });
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn sda-btn-add', style: { fontSize: '11px', padding: '3px 9px', color: '#2471a3', borderColor: '#aed6f1', marginTop: '0' },
+      onclick: () => { r.items.push({ targetField: '', valueSource: 'clear', valueParam: '' }); render(); },
+    }, ['+ 新增欄位']));
+    btnRow.appendChild(el('button', {
+      class: 'sda-btn', style: { fontSize: '11px', padding: '3px 9px' },
+      title: '進階：直接以 JSON 編輯 items（陣列）',
+      onclick: () => openTextModal({
+        title: '進階：直接編輯批次寫入的 items JSON（陣列）',
+        value: JSON.stringify(r.items || [], null, 2),
+        confirmLabel: '套用',
+        onConfirm: async (text) => {
+          let parsed;
+          try { parsed = JSON.parse(text); }
+          catch { await notify({ icon: 'error', title: '格式錯誤', text: 'JSON 格式錯誤，請檢查括號與引號是否成對。' }); return false; }
+          if (!Array.isArray(parsed)) {
+            await notify({ icon: 'error', title: '格式錯誤', text: '此欄位必須是陣列，請以 [ ... ] 包住。' });
+            return false;
+          }
+          r.items = parsed; render();
+        },
+      }),
+    }, ['{ } JSON']));
+    wrap.appendChild(btnRow);
+    wrap.appendChild(el('div', { style: { color: '#6b7480', fontSize: '12px' } },
+      ['由上而下依序寫入。一般欄位／複選／使用者・組織・群組選擇／子表格都可清空；使用者類固定值填代碼；子表格清空後保留一列空白列。']));
+    return wrap;
+  };
+
   const subRuleParamControl = (sr, subOpts) => {
     if (sr.valueSource === 'elapsedMinutes') {
       if (!sr.valueParam || typeof sr.valueParam !== 'object') sr.valueParam = { sinceField: '' };
@@ -1521,6 +2011,8 @@
         onclick: () => previewDialogRule(r),
       }, ['👁 預覽此提醒視窗']));
 
+    } else if (r.action === 'writeSelfBatch') {
+      addRow('欄位清單', renderBatchEditor(r));
     } else if (r.action === 'writeSelf') {
       const isSubtable = r.valueSource === 'appendSubtable';
       addRow('目標欄位', fieldCombo(isSubtable && SUBTABLE_OPTIONS.length > 1 ? SUBTABLE_OPTIONS : FIELD_OPTIONS, r.targetField, (v) => { r.targetField = v; render(); }));
@@ -1630,6 +2122,10 @@
     full.dialogStyle = Object.assign({}, DEFAULT_DIALOG_STYLE, full.dialogStyle || {});
     full.creatorCheck = Object.assign({}, DEFAULT_CREATOR_CHECK, full.creatorCheck || {});
     full.creatorCheck.visibility = Object.assign({}, DEFAULT_CREATOR_CHECK_VISIBILITY, full.creatorCheck.visibility || {});
+    full.dbFieldMap = Object.assign({}, DEFAULT_DBMAP, full.dbFieldMap || {}, {
+      fields: dbmapFieldsForSave(),
+      transforms: (state.dbFieldMap.transforms || []).map(dbmapCleanTransform),
+    });
     full.rules = (full.rules || []).map((r) => {
       const out = Object.assign(JSON.parse(JSON.stringify(RULE_DEFAULTS)), r);
       if (out.action === 'dialog') {
@@ -1678,9 +2174,11 @@
         const incomingCheck = (parsed && parsed.creatorCheck && typeof parsed.creatorCheck === 'object') ? parsed.creatorCheck : null;
         const styleNote = incomingStyle ? '\n（提醒視窗外觀也會一併套用）' : '';
         const checkNote = incomingCheck ? '\n（建立人狀態檢查的設定也會一併套用；權杖仍需本 App 自己填）' : '';
+        const incomingDbMap = (parsed && parsed.dbFieldMap && typeof parsed.dbFieldMap === 'object') ? parsed.dbFieldMap : null;
+        const dbMapNote = incomingDbMap ? '\n（主資料庫欄位對照也會一併套用；本 App 已填的主資料庫 App ID 會保留）' : '';
         const agreed = await askConfirm({
           icon: 'warn', title: '確認匯入',
-          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。${styleNote}${checkNote}`,
+          text: `將以匯入的 ${rules.length} 條規則「取代」目前的 ${state.rules.length} 條規則。${styleNote}${checkNote}${dbMapNote}`,
           confirmLabel: '確定取代', cancelLabel: '再想想',
         });
         if (!agreed) return false;
@@ -1717,6 +2215,13 @@
           ['users', 'organizations', 'groups'].forEach((k) => {
             if (!Array.isArray(state.creatorCheck.visibility[k])) state.creatorCheck.visibility[k] = [];
           });
+        }
+        if (incomingDbMap) {
+          const prevDbAppId = state.dbFieldMap.dbAppId;
+          state.dbFieldMap = Object.assign({}, DEFAULT_DBMAP, incomingDbMap);
+          if (!Array.isArray(state.dbFieldMap.fields)) state.dbFieldMap.fields = [];
+          if (!Array.isArray(state.dbFieldMap.transforms)) state.dbFieldMap.transforms = [];
+          if (String(prevDbAppId || '').trim()) state.dbFieldMap.dbAppId = prevDbAppId;
         }
         render();
         const msg = document.getElementById('sda-msg');
@@ -1758,6 +2263,20 @@
       const id = `規則 #${i + 1}` + (r.label ? ` (${r.label})` : '');
       if (r.action === 'writeSelf' && r.valueSource !== 'readonly' && !r.targetField) {
         errors.push(`${id}: 缺少目標欄位`);
+      }
+      if (r.action === 'writeSelfBatch') {
+        const items = Array.isArray(r.items) ? r.items : [];
+        if (!items.length) errors.push(`${id}: 批次寫入至少要設定一個欄位`);
+        const used = new Set();
+        items.forEach((it) => {
+          if (!it || !it.targetField) { errors.push(`${id}: 有欄位未選擇目標欄位`); return; }
+          if (used.has(it.targetField)) errors.push(`${id}: 欄位「${it.targetField}」重複`);
+          used.add(it.targetField);
+          const vs = it.valueSource || 'clear';
+          if (FIELD_TYPES[it.targetField] === 'SUBTABLE' && !['clear', 'readonly'].includes(vs)) {
+            errors.push(`${id}: 子表格「${it.targetField}」只能「清空」或「唯讀鎖定」`);
+          }
+        });
       }
       if (r.action === 'dialog' && !String((r.dialog && r.dialog.text) || '').trim()) {
         errors.push(`${id}: 提醒視窗缺少內文`);
@@ -1809,6 +2328,19 @@
         }
       }
     }
+    const dm = state.dbFieldMap;
+    if (dm.enabled) {
+      if (!String(dm.dbAppId || '').trim()) errors.push('主資料庫欄位對照：已啟用但未填主資料庫 App ID（第 6 區）');
+      else if (!dbmapFieldsForSave().length && !(dm.transforms || []).some((t) => t && t.enabled !== false)) {
+        errors.push('主資料庫欄位對照：已啟用但沒有勾選任何欄位、也沒有啟用中的轉換規則（第 6 區）；不需要時請取消「啟用」');
+      }
+      (dm.transforms || []).forEach((t, i) => {
+        if (!t || t.enabled === false || !window.SdaDbMap) return;
+        window.SdaDbMap.validateTransform(dbmapCleanTransform(t)).forEach((e) => {
+          errors.push(`主資料庫欄位對照 轉換 #${i + 1}${t.label ? `（${t.label}）` : ''}：${e}`);
+        });
+      });
+    }
     return errors;
   };
 
@@ -1852,6 +2384,11 @@
       hasAdminApiToken: !!adminToken,
       creatorCheck: Object.assign({}, state.creatorCheck, {
         columns: (state.creatorCheck.columns || []).filter((col) => col && col.field),
+      }),
+      dbFieldMap: Object.assign({}, state.dbFieldMap, {
+        dbAppId: String(state.dbFieldMap.dbAppId || '').trim(),
+        fields: state.dbFieldMap.enabled ? dbmapFieldsForSave() : (state.dbFieldMap.fields || []),
+        transforms: (state.dbFieldMap.transforms || []).map(dbmapCleanTransform),
       }),
       tokens: (state.tokens || []).map((t) => {
         const row = { appId: t.appId, appLabel: t.appLabel };

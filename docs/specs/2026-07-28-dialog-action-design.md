@@ -11,7 +11,7 @@
 
 規則模型原本是 `trigger` + 狀態條件 + 欄位條件 → `writeSelf` / `writeOther`。提醒視窗不寫任何欄位，但需要一模一樣的比對條件，所以做成第三種 `action`：`dialog`。
 
-這個選擇讓它零成本繼承 `triggerMatches`、`statusMatches`、`conditions` + AND/OR，runtime 不需要為它另開比對路徑，設定畫面也只是 `ACTIONS` 多一項、`renderRuleCard` 多一個分支。
+這樣它可以直接沿用 `triggerMatches`、`statusMatches`、`conditions` + AND/OR，runtime 不需要為它另開比對路徑，設定畫面也只是 `ACTIONS` 多一項、`renderRuleCard` 多一個分支。
 
 ## 檔案結構：`dist/dialog.js` 三邊共用
 
@@ -44,7 +44,7 @@
 
 ## 四個邊界
 
-1. **只有 `process.proceed` 與 `/\.submit$/` 攔得住。** 只有這些時機 kintone 會等 handler 回傳的 Promise。`*.show` 畫面已渲染完、`*.submit.success` 記錄已存檔，不符時 runtime 強制清空 `cancelLabel`，設定畫面同步顯示警告。讓使用者以為能取消是騙人的。
+1. **只有 `process.proceed` 與 `/\.submit$/` 攔得住。** 只有這些時機 kintone 會等 handler 回傳的 Promise。`*.show` 畫面已渲染完、`*.submit.success` 記錄已存檔，不符時 runtime 強制清空 `cancelLabel`，設定畫面同步顯示警告。否則使用者會誤以為按取消有用。
 2. **中止點＝規則在清單裡的位置。** 排在它前面的規則已經跑完。`writeOther` 一律在所有 selfRules 之後執行，故必定被擋。
 3. **`create.submit` 抓不到 `$id`**，`{記錄編號}` 會是空的。要顯示新單號只能用 `*.submit.success`，但那時不能擋。
 4. **`runProceedRulesViaApi`** 傳 `noBlock: true`：狀態已由 REST API 推進完畢，取消無法回滾。
@@ -61,19 +61,19 @@
 
 ## 追記（v1.16.0）：改用組織既有的 SweetAlert2
 
-原始設計自建元件、刻意不依賴 SweetAlert2，理由是「預覽＝實際」——外掛設定畫面是 kintone 管理端頁面，若 runtime 用全域 Swal 而設定畫面拿不到它，預覽就會騙人。
+原始設計自建元件、刻意不依賴 SweetAlert2，理由是「預覽＝實際」——外掛設定畫面是 kintone 管理端頁面，若 runtime 用全域 Swal 而設定畫面拿不到它，預覽就會跟實際長得不一樣。
 
 但這個理由忽略了一件事：**組織已把 SweetAlert2 建成全域可用的標準元件**，而且外掛自己早就有一處在用它（`compensationWrite` 的 `if (window.Swal)`）。堅持自建等於讓外掛內部自相矛盾，也讓提醒視窗跟組織其他系統長得不一樣。
 
 **決定**：`SdaDialog.show()` 在呼叫當下偵測 `window.Swal`，有就用、沒有才用內建元件。兩條路的回傳值語意相同，呼叫端不需區分。
 
 - **偵測必須在 `show()` 內**，不可在載入時：外掛 JS 可能早於 App 自訂 JS 執行。
-- **樣式以 `.sda-swal` / `.sda-swal-container` 收斂**，避免外掛的寬度字級設定污染 App 自己的 SweetAlert2 呼叫。
+- **樣式一律限定在 `.sda-swal` / `.sda-swal-container` 底下**，避免外掛的寬度字級設定污染 App 自己的 SweetAlert2 呼叫。
 - **`accent` 停在預設值就不覆寫 SweetAlert2 的圖示配色**：管理者沒表達意見時，保留原生的淺橘圈線＋深橘驚嘆號，正好就是需求截圖那個樣子。
 - **`success` / `error` 圖示固定用語意色**，`accent` 不介入。SweetAlert2 這兩個圖示由多個子元素組成，只改 `border-color` 與 `color` 會半染色；兩種渲染器在此行為一致。
-- **原本的預覽風險改以誠實揭露處理**：設定畫面用 `hasSwal()` 偵測並顯示綠／橘提示，說明預覽是否等於實際。放棄保證、改為揭露，是接受此方案時付出的代價。
+- **原本的預覽落差改用提示處理**：設定畫面用 `hasSwal()` 偵測並顯示綠／橘提示，說明預覽是否等於實際。不再保證完全一致、改為明確提示，是接受此方案時付出的代價。
 
-**連帶收斂**：`config.js` 的所有原生 `alert` / `confirm` 一併改走 `notify()` / `askConfirm()`。三個必要的配套——`openTextModal` 的確定鈕改 `async`（匯入流程需在 modal 內再確認一層）、儲存成功改 `.then()` 後才跳轉（非同步視窗不擋，導頁會把訊息帶走）、`.sda-swal-container` 的 `z-index` 拉到 100000（SweetAlert2 預設 1060 會被 `openTextModal` 的 9999 蓋住）。
+**連帶調整**：`config.js` 的所有原生 `alert` / `confirm` 一併改走 `notify()` / `askConfirm()`。三個必要的配套——`openTextModal` 的確定鈕改 `async`（匯入流程需在 modal 內再確認一層）、儲存成功改 `.then()` 後才跳轉（非同步視窗不擋，導頁會把訊息帶走）、`.sda-swal-container` 的 `z-index` 拉到 100000（SweetAlert2 預設 1060 會被 `openTextModal` 的 9999 蓋住）。
 
 `compensationWrite` 也改走 `SdaDialog`，順帶修掉一個既有缺陷：舊版沒有 Swal 時只寫 `console.warn`，使用者看不到補償寫入失敗，履歷漏記卻無人察覺。
 
@@ -92,5 +92,5 @@
 
 - **內建元件**：`buildCss` 的數值容錯與 `customCss` 串接順序、確定／取消／`Esc` 三種關閉路徑的回傳值、overlay 清理、重複點擊只 resolve 一次、SVG 圖示（success 畫勾、error 畫叉、warn 保留字元＋動畫圓環）。
 - **寬度與換行**：主樣式區用 `pre` 而非 `pre-wrap`、無 `word-break`、無 `max-width` 上限、SweetAlert2 的 `max-width:100%` 已解除、遮罩 `overflow:auto` 且視窗 `margin:auto`（遮罩規則不含 `justify-content`）、`@media (max-width:600px)` 存在且排在 `customCss` 之前、`width` 已從樣式模型移除。
-- **SweetAlert2 路徑**：有 Swal 時不產生內建 DOM、圖示名稱對應、傳 `text` 而非 `html`、`customClass` 收斂、`allowOutsideClick: false`、無取消鍵時 dismiss 仍回 `true`、有取消鍵時回 `false`、空標題不送出、accent 預設不覆寫圖示／改色才覆寫、`success` 保留語意色、`z-index` 壓過 `openTextModal`、無 Swal 時退回內建。
+- **SweetAlert2 路徑**：有 Swal 時不產生內建 DOM、圖示名稱對應、傳 `text` 而非 `html`、`customClass` 限定樣式範圍、`allowOutsideClick: false`、無取消鍵時 dismiss 仍回 `true`、有取消鍵時回 `false`、空標題不送出、accent 預設不覆寫圖示／改色才覆寫、`success` 保留語意色、`z-index` 壓過 `openTextModal`、無 Swal 時退回內建。
 - **runtime 整合**：`{欄位代碼}` 代入、「按確定→後續規則執行」、「按取消→`event.error` 已設且後續規則未執行」，以及**在 `desktop.js` 執行完之後才掛上 `window.Swal` 仍能被 `show()` 偵測到**（驗證偵測時機的決定）。

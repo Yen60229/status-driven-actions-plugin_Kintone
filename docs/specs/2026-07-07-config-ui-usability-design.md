@@ -13,7 +13,7 @@
 3. **規則卡片資訊量大**：一張規則卡全部欄位一次展開，10+ 列，同仁看不出規則在做什麼
 4. **英文技術術語多**：`process.proceed`、`fromStatus`、`upsert` 等英文詞彙不好理解
 
-目標：讓非技術背景的部門承辦人／主管能看懂並安全地微調規則，同時不犧牲 MIS 原有的彈性（進階 JSON 編輯退路保留）。
+目標：讓非技術背景的部門承辦人／主管能看懂並安全地微調規則，同時不犧牲 MIS 原有的彈性（保留進階 JSON 編輯）。
 
 ## 非目標
 
@@ -26,7 +26,7 @@
 
 所有改動集中在 `contents/dist/config.js`。沿用現有的 render 模式：`state` 是單一可變物件、`render()` 整頁重繪、各元件是回傳 DOM 節點的函式（`el`/`select`/`textInput`/`fieldCombo`/`renderMappingEditor` 等）。
 
-新增兩條資料來源，皆採**快取 + 失敗退路**：
+新增兩條資料來源，皆採**快取，失敗時改用備案**：
 
 - `ensureAppStatuses()`：呼叫 `kintone.api('/k/v1/app/status.json', 'GET', { app: APP_ID })`（本 App，非目標 App），取得 `states`（狀態名稱清單）與 `actions`（動作名稱清單，來自 `{name, from, to}` 三元組，取 `name` 去重）。結果快取在模組變數，失敗時整段退回目前的手動文字輸入＋一行黃字提示。
 - 自己 App 的欄位讀取，從現行的 `KintoneConfigHelper.getFields()`（回傳扁平清單、不含子表格內部欄位與型別結構）改為直接呼叫 `kintone.api('/k/v1/app/form/fields.json', 'GET', { app: APP_ID })`。這支 API 回傳的 `properties` 物件對 `SUBTABLE` 型別欄位會在 `properties[子表格代碼].fields` 內附上子表格「內部」欄位的完整定義，因此可以和既有 `ensureTargetFields()`（讀目標 App 欄位，做法相同）共用同一套「型別感知」欄位資料結構。同時保留 `KintoneConfigHelper.getFields()` 作為此 API 呼叫失敗時的 fallback（退回無型別的扁平清單，子表格內部欄位選單則退回文字輸入）。

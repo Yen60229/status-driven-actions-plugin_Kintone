@@ -1,9 +1,9 @@
 # 狀態驅動動作外掛（Status-Driven Actions Plug-in）— 開發指南
 
-> 此檔為**開發者 / Claude Code** 在本資料夾工作的指引。
+> 此檔是**改程式的人**在本資料夾工作的指引。
 > 給管理者看的「使用說明書」在 [README.md](README.md)；
 > **IT 維護、除錯、升版、交接** → [IT維護手冊.md](IT維護手冊.md)
-> 程式碼層面的完整技術說明集中在 [README.md 附錄 B](README.md)（B-1 ～ B-13）。
+> 程式碼層面的完整技術說明集中在 [README.md 附錄 B](README.md)（B-1 ～ B-18）。
 
 ---
 
@@ -17,9 +17,9 @@
 
 > 執行 Log 寫入本公司的 [SYS-06-6_Plug-In(Log)](https://nipponexpress-taiwan.cybozu.com/k/708/)（App ID 708）。
 
-一個 kintone **外掛（plugin）**。當記錄的流程狀態改變（或儲存、開啟）時，依管理者在設定畫面定義的「規則」自動寫入欄位值、寫入子表格、或寫入其他 App 的記錄，並可選配將每次執行結果記到一個 Log App。
+一個 kintone **外掛（plugin）**。當記錄的流程狀態改變（或儲存、開啟）時，依管理者在設定畫面定義的「規則」自動寫入欄位值（可一次寫多個欄位）、寫入子表格、寫入其他 App 的記錄或跳出提醒視窗，也可以把每次執行結果記到一個 Log App。
 
-整個外掛是**被動事件驅動、無背景常駐**：只註冊 6 個使用者操作事件，無 `setInterval`／輪詢。詳見 [README.md 附錄 B-2](README.md)。
+整個外掛是**被動事件驅動、無背景常駐**：只掛使用者操作事件（清單見文末「註冊的事件」），沒有 `setInterval`／輪詢。詳見 [README.md 附錄 B-2](README.md)。
 
 ---
 
@@ -30,12 +30,16 @@ status-driven-actions-plugin/
 ├── CLAUDE.md                ← 本檔
 ├── IT維護手冊.md            ← 給 IT 同仁：架構、除錯症狀表、維運與交接
 ├── README.md                ← 使用說明書 + 附錄 B 技術說明（最重要的參考）
+├── 提醒視窗操作教學.md      ← 給管理者：提醒視窗的設定步驟
+├── build.ps1                ← 打包腳本（見下方「重新打包」）
+├── log-app/                 ← Log App（708）用的自訂 JS（不屬於外掛）
 ├── contents/                ← 外掛原始內容（打包來源）
 │   ├── manifest.json        ← 版本號、事件 JS 註冊、設定畫面宣告
 │   ├── dist/
 │   │   ├── desktop.js        ← 執行期 runtime（電腦版）
 │   │   ├── mobile.js         ← 與 desktop.js 內容【完全相同】
 │   │   ├── dialog.js         ← 提醒視窗元件，desktop/mobile/config【三邊共用，不複製】
+│   │   ├── dbmap.js          ← 主資料庫欄位對照的轉換規則引擎，同樣【三邊共用，不複製】
 │   │   └── config.js         ← 設定畫面（純 JS 渲染到 #ui-section）
 │   ├── source/
 │   │   ├── html/config.html  ← 設定畫面外殼
@@ -43,7 +47,7 @@ status-driven-actions-plugin/
 │   │   └── image/icon.png
 │   └── 3rd_parties/kintone-config-helper.js
 ├── config-ui-preview.html   ← 設定畫面的離線預覽（非打包內容）
-├── docs/superpowers/        ← 設計文件（specs）與實作計畫（plans）
+├── docs/                    ← specs（設計）、plans（實作計畫）、rule-templates（規則範本）
 ├── *.ppk                    ← 簽章私鑰【機密，已 .gitignore，切勿提交】
 └── plugin*.zip              ← 建置產物【已 .gitignore】
 ```
@@ -57,9 +61,7 @@ status-driven-actions-plugin/
    `diff contents/dist/desktop.js contents/dist/mobile.js` 應無輸出。
    （單一檔案同時註冊 `app.record.*` 與 `mobile.app.record.*` 事件，kintone 自動忽略不符當前平台的事件名稱。）
 
-   ⚠ **`dialog.js` 不在此規則內**——它是 desktop / mobile / config 三邊共用的同一個檔案（`manifest.json` 三個 js 陣列都列它），改一次三邊都生效，**不要複製它**。設定畫面的「預覽」呼叫的就是 runtime 的 `SdaDialog.show()`。
-
-5. **不要在外掛裡用原生 `alert` / `confirm`。** 一律走 `SdaDialog.show()`（runtime）或 `notify()` / `askConfirm()`（`config.js`），它們會在有 `window.Swal` 時用 SweetAlert2、沒有時用內建元件。唯一保留原生的地方是這些包裝函式自己的最後退路（`SdaDialog` 未載入時），確保訊息不會整個消失。
+   ⚠ **`dialog.js`、`dbmap.js` 不在此規則內**——它是 desktop / mobile / config 三邊共用的同一個檔案（`manifest.json` 三個 js 陣列都列它），改一次三邊都生效，**不要複製它**。設定畫面的「預覽」呼叫的就是 runtime 的 `SdaDialog.show()`。
 
 2. **絕不可 `console.log` 原始 config。** `rawConfig.data` 內含 API Token，會洩漏給所有開 DevTools 的使用者。見 [README.md 附錄 B-12](README.md)。
 
@@ -67,17 +69,22 @@ status-driven-actions-plugin/
 
 4. **程式碼裡不寫註解。** 本專案刻意移除 `dist/*.js` 的所有註解，技術說明一律寫進 README 附錄 B。維護時更新附錄 B，不要在 JS 內加回註解。
 
+5. **不要在外掛裡用原生 `alert` / `confirm`。** 一律走 `SdaDialog.show()`（runtime）或 `notify()` / `askConfirm()`（`config.js`），它們會在有 `window.Swal` 時用 SweetAlert2、沒有時用內建元件。唯一保留原生的地方是這些包裝函式自己的最後備案（`SdaDialog` 未載入時），確保訊息不會整個消失。
+
 ---
 
 ## 重新打包（建置）
 
-修改 `contents/dist/*.js` 後：
+修改 `contents/dist/*.js` 後，用 `build.ps1`（自動同步 `mobile.js`、改 `manifest.json` 的 `version` 與 `config.js` 的 `UI_VERSION`、語法與 Token 外洩檢查、找本資料夾的 `.ppk` 打包成 `plugin-v<版本>.zip`）：
 
-```bash
-npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
+```powershell
+.\build.ps1 1.20.1          # 指定版本
+.\build.ps1 patch           # 由目前版本自動 +1（minor / major 亦可）
+.\build.ps1                 # 互動詢問；Enter＝沿用目前版本
+.\build.ps1 1.20.1 -Force   # 覆蓋已存在的同版本 zip
 ```
 
-產物 `plugin*.zip` 不進版控（`.gitignore` 已排除）。版本號改在 `contents/manifest.json` 的 `version`。
+手動打包：`npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip`。產物 `plugin*.zip` 不進版控（`.gitignore` 已排除）。
 
 ---
 
@@ -101,31 +108,34 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | 值來源 | `valueSource` 一覽：`fixed`/`loginUser`/`today`/`fieldCopy`/`formula`/`lookup`/`dateShift`/`subtableLastRow`/`appendSubtable`/`readonly`… | B-5、B-6 |
 | 日期加減 | `dateShift`（`parseBaseDate`/`addPeriod`/`formatDateOut`/`computeDateShift`；可讀 `ctx.targetRecord`，v1.6.0） | B-6 |
 | 子表格履歷 | `appendSubtable` + `historyMode` | B-7 |
+| 批次寫入 | `action: 'writeSelfBatch'` + `items[]`：`runSelfRule` 逐列套 `runWriteSelf` 並回傳 touched 欄位；`writeToField` 依 `type` 特判 SUBTABLE（只清空，留一列空白）與 USER/ORG/GROUP_SELECT（`toEntityList` → `[{code}]`）（v1.20.0） | B-9、B-16 |
 | 執行 Log | `loggedApply`、`flushSubmitLog`、`writeLog`/`postLog`、`_runInfo`/`_pendingSubmitLog`（方案 A，v1.5.0） | B-8、B-8a、B-8b |
 | 錯誤分類 | `errorCodeOf`/`classifyError`/`friendlyError`/`recordError`（`session`/`permission`/`config`/`system`） | B-8a |
+| 錯誤顯示 | `blockEvent`／`flushErrorDialog`：擋下動作的錯誤只在 `event.error` 放短句 `NATIVE_BLOCK_TEXT`，完整原因用 `SdaDialog.show()`（全域 SweetAlert）顯示；會先等其他 Swal 關閉；**新增錯誤擋下路徑時一律呼叫 `blockEvent`／`recordError`，不要直接寫 `event.error`**（v1.21.0） | B-18 |
 | 寫入判別 | `classifyWrite`（userObject / arrayField / scalar） | B-9 |
 | 規則條件 | `rule.conditions` + `op`（eq/neq/startsWith/contains/inList）+ `conditionLogic` | B-10 |
 | 狀態多值 | `statusMatchesList`：`fromStatus`/`toStatus`/`actionName`/`statusCond` 支援逗號分隔任一命中（v1.7.2） | B-10a |
 | 觸發複選 | `triggerMatches`／`statusMatches` 依實際觸發事件分流；`rule.trigger` 可逗號分隔複選（v1.9.0） | B-10b |
-| 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`）：**呼叫當下**偵測 `window.Swal`，有就用 SweetAlert2、沒有才用內建元件，樣式以 `.sda-swal` 收斂（v1.16.0） | B-14 |
+| 提醒視窗 | `action: 'dialog'`：`runDialog` + `interpolateFields`（`{欄位代碼}` 代入）；可中止判別＝`process.proceed` 或 `/\.submit$/`，不符時強制隱藏取消鍵；取消→`_runInfo.cancelled` + `event.error`，Log 記 `cancelled`／「取消」（v1.15.0）。UI 元件在共用檔 `dist/dialog.js`（`window.SdaDialog`）：**呼叫當下**偵測 `window.Swal`，有就用 SweetAlert2、沒有才用內建元件，樣式限定在 `.sda-swal` 底下（v1.16.0） | B-14 |
 | 跨 App 寫入 | `writeOther`（create/update/upsert + keyMapping/fieldMapping + onError；`ruleNeedsTargetRecord` 抓整筆供 dateShift 回算）；`buildOtherPayload` 回傳 `{payload,suspects}`，`fieldCopy` 來源欄位不存在／`dateShift` 空值時標記可疑；`badFieldsFromError` 解析 kintone `errors` 指名欄位 | B-11 |
 | 共通管理 API | `userApiGet`：cybozu.com 共通管理 User API（`/v1/users.json` 等）走 `Authorization: Bearer <cy.s.api1.…>`，與 App Token 是**兩套認證**，代理設定另註冊 `${location.origin}/v1/` 的 GET header；對外暴露 `window.NXSdaUserApi.get(path, params)` | B-4、B-15 |
 | 建立人狀態檢查 | `mountCreatorCheckButton`／`openCreatorCheckPanel`（`index.show` 掛按鈕）：掃一覽表篩選結果 → 查建立人帳號 `valid` → `SdaDialog.showPanel()` 表格（勾選／就地編輯／刪除）。記錄的讀改刪**一律用操作者 session**，不套 Token；`CC_EDITABLE_TYPES` 必須與 `config.js` 的 `CREATOR_CHECK_EDITABLE_TYPES` 一致；`ccCheckVisibility` 依 `visibility.mode`（`users`/`organizations`/`groups` 名單）決定按鈕要不要對目前登入者顯示，部門／群組判斷需共通管理 API 權杖；`config.js` 用 `ensureCcDirectory`+`searchAddInput` 把三個名單做成打字搜尋、多選 chips（一次抓全部快取，不逐字打 API），無權杖時退化成手動輸入代碼（v1.17.0；`visibility` 為 v1.17.1，搜尋 UI 為 v1.17.2） | B-15 |
-| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；觸發時機用 `triggerCheckboxGroup` 複選（v1.9.0）；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯退路，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
+| 主資料庫欄位對照 | 通用功能：`CONFIG.dbFieldMap` 啟用時放出凍結的 `window.NXSdaDbFieldMap`（`dbAppId`／`fields`／`read`／`compare`／`writeRules`／`transformTargets`／`applyTransforms`），只供 App 自訂 JS 使用，外掛本身不在任何事件據此讀寫；寫入一律走第 2 區規則。轉換規則引擎在共用檔 `dist/dbmap.js`（`window.SdaDbMap`）。設定畫面 `renderDbMapSection`／`buildDbMapRows`／`renderDbMapTransforms`；不得放入任何特定 App 的欄位或規則（v1.21.0） | B-17 |
+| 設定畫面 | `config.js`：欄位用 `fieldCombo`（datalist 文字搜尋）、`searchableSelect`；觸發時機用 `triggerCheckboxGroup` 複選（v1.9.0）；writeOther 的 keyMapping/fieldMapping 改用 `renderMappingEditor`（目標欄位下拉＝`ensureTargetFields` 讀目標 App 的 `/k/v1/app/form/fields.json`；值來源＝`MAPPING_VALUE_SOURCES`；保留「{ } JSON」進階編輯，v1.8.0）；匯出／匯入（B-12a）；`UI_VERSION` 顯示於工具列 | B-12a |
 
 **先讀附錄 B 再動程式碼**——它是這份 runtime 的權威說明。
 
 ---
 
-## 設定 JSON 結構（匯出／匯入；給「自動產生規則」用）
+## 設定 JSON 結構（匯出／匯入；用程式產生規則時參考）
 
-> 這一節**自包含**，把它整段貼給另一個 session，它就能產出可直接從設定畫面「匯入設定」的 JSON。
+> 這一節可以單獨拿出來用：照著它寫出的 JSON，可以直接在設定畫面「匯入設定」貼上。
 > 設定存放方式：整包設定是**單一 JSON 字串**，存在 `kintone.plugin.app.getConfig().data`。設定畫面用 `JSON.parse/JSON.stringify` 存取。
 
 ### 匯入規則（重要）
 
 - 設定畫面的「**匯入設定**」只套用 `rules`、`dialogStyle`（v1.15.0）與 `creatorCheck`（v1.17.0），預設**不動**本 App 的 `selfAppToken`／`tokens`／`logAppId`／`logToken`／`adminApiToken`（避免把來源 App 的 Token／App ID 誤帶過去）；v1.19.0 起若 JSON 內含這些值，會再詢問「一併套用／只套規則」。匯出為完整備份（規則選填鍵補齊＋所有 Token 明碼）。
-- 因此自動產生時，**只要輸出 `rules`**即可（有提醒視窗規則且想指定外觀時再加 `dialogStyle`）。可給下列任一形狀：
+- 所以自己產生規則時，**只要給 `rules`** 即可（有提醒視窗規則且想指定外觀時再加 `dialogStyle`）。可給下列任一形狀：
   - `{ "rules": [ ...規則... ] }`
   - 或直接一個陣列 `[ ...規則... ]`
 - 欄位一律填 **kintone 欄位代碼（Field Code）**，不是顯示名稱。狀態名稱要與 kintone 流程設定**完全一致**（全形半形、空白都算）。
@@ -181,6 +191,9 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
   // ── 動作 ──
   "action": "writeSelf",          // writeSelf=寫本記錄 / writeOther=寫其他 App / dialog=跳提醒視窗
+
+  // action=writeSelfBatch 時（v1.20.0）：一次寫多個本記錄欄位，每列同 writeSelf 的 targetField/valueSource/valueParam/skipIfFilled/appendMode
+  "items": [ { "targetField": "備註", "valueSource": "clear" }, { "targetField": "承辦人", "valueSource": "fixed", "valueParam": "user01,user02" } ],
 
   // action=dialog 時（v1.15.0）：不寫欄位，跳視窗並等使用者按確定，之後才跑排在它下面的規則
   "dialog": {
@@ -240,7 +253,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 | `appendSubtable` | `{ subRules:[{targetField,valueSource,valueParam?}], historyMode? }` | 子表格新增一列（履歷） |
 | `appendText` | `{ value:{valueSource,valueParam?}, separator?, dedup? }` | 文字欄位串接追加（v1.11.0）。`value` 為巢狀 valueSource，決定要附加的新值；`separator` 預設 `" / "`；`dedup`(預設 true) 時若新值已存在於現有字串中則略過。`writeSelf` 讀寫本記錄的 `targetField`；`writeOther` 讀寫目標 App 的 `targetField`（需 `ctx.targetRecord`，upsert 命中既有記錄時才有；新增時視為空值直接寫入） |
 | `clear` | — | 清空欄位 |
-| `readonly` | — | 唯讀鎖定（僅 `*.show` 時機）；`index.edit.show` 灰階不可編輯，其餘 `*.show` 直接隱藏欄位（v1.9.0） |
+| `readonly` | — | 唯讀鎖定（僅 `*.show` 時機）；設 `disabled = true`，欄位照常顯示但灰階不可編輯，不隱藏（v1.21.1） |
 
 `dateShift` 的 `valueParam`：
 
@@ -294,7 +307,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 }
 ```
 
-> 產生規則時要請對方提供：**目標欄位代碼、狀態名稱、目標 App ID**（這些外掛無法自己推斷）。完整語意以 [README.md 附錄 B-5～B-11](README.md) 為準。
+> 產生規則前要先問清楚：**目標欄位代碼、狀態名稱、目標 App ID**（這些外掛沒辦法自己推斷）。完整語意以 [README.md 附錄 B-5～B-11](README.md) 為準。
 
 ---
 
@@ -309,7 +322,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 ## 設計文件
 
-`docs/superpowers/specs/` 放設計（specs），`docs/superpowers/plans/` 放實作計畫。做較大改動前先看這裡是否已有對應設計。
+`docs/specs/` 放設計文件，`docs/plans/` 放實作計畫，`docs/rule-templates/` 放可匯入的規則範本。做較大改動前，先看這裡有沒有對應的設計。
 
 ---
 

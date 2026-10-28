@@ -1,23 +1,25 @@
 # 狀態驅動動作外掛 — 使用說明書
 
-> 適用版本：v1.7.2　　最後更新：2026-06-26
+> 適用版本：v1.20.0　　最後更新：2026-10-20
 >
 > 📘 **IT 同仁（維護、除錯、升版）請先看 [IT維護手冊.md](IT維護手冊.md)。**
 >
-> 💡 程式碼（`desktop.js` / `mobile.js` / `config.js`）已移除全部註解，所有技術說明集中在本文件「**附錄 B：技術說明（開發者參考）**」。
+> 💡 程式碼（`desktop.js` / `mobile.js` / `config.js`）裡不寫註解，技術說明都集中在本文件「**附錄 B：技術說明（開發者參考）**」。
 
 ---
 
 ## 這個外掛是做什麼的？
 
-當記錄的**流程狀態改變**（或儲存、開啟）時，自動幫你填寫指定欄位的值。
+當記錄的**流程狀態改變**（或開啟、儲存）時，自動幫你填欄位、寫別的 App，或跳出提醒視窗。
 
 **舉例：**
-- 按下「核准」按鈕 → 自動填入「核准日期 = 今天」、「核准者 = 登入者」
-- 按下「完成」按鈕 → 自動在履歷子表格新增一筆記錄
-- 按下「出貨」按鈕 → 自動更新另一個 App（客戶主檔）的「最近出貨日」
+- 按下「核准」→ 自動填入「核准日期 = 今天」、「核准者 = 登入者」
+- 按下「完成」→ 自動在履歷子表格新增一列
+- 按下「出貨」→ 自動更新另一個 App（客戶主檔）的「最近出貨日」
+- 用「再利用」複製舊單新增時 → 一次清空備註、承辦人、明細子表格，日期改成今天
+- 送出請款單前 → 跳出提醒，請使用者記得寄紙本憑證
 
-不需要請工程師，管理者自己就能設定。
+管理者在設定畫面點選就能設好，不用寫程式。
 
 ---
 
@@ -45,7 +47,7 @@
 1. 點右上角齒輪圖示 →「**系統管理**」
 2. 左側選單「外掛程式」→「**外掛程式管理**」
 3. 點「**匯入**」按鈕
-4. 選擇 `plugin.zip` 檔案 → 確認上傳
+4. 選擇工程師給的外掛檔（例如 `plugin-v1.20.0.zip`）→ 確認上傳
 
 > ✅ 上傳成功後，外掛清單會出現「狀態驅動動作外掛」
 
@@ -92,7 +94,7 @@
 
 外掛會自動判斷、不需要額外設定：
 
-- **推進者有編輯權限**（例如經辦人自己送出）→ 欄位值隨狀態轉換一起原子儲存，不動用 Token。
+- **推進者有編輯權限**（例如經辦人自己送出）→ 欄位值跟狀態轉換一起存檔，不動用 Token。
 - **推進者沒有編輯權限**（例如簽核人只是「作業者」，但沒有記錄編輯權）→ 自動改用「本 App Token」在推進完成後補寫，並重新整理畫面顯示結果。
 
 > kintone 的「**作業者**」與「**記錄編輯權限**」是兩套獨立設定。簽核人可以是作業者（因此按得動推進鈕），同時完全沒有記錄編輯權限——這正是「除了經辦人，其他簽核人都不給編輯權」這種設計會遇到的情況，外掛判斷得出來並會自動用 Token 補寫。**你只要把「本 App Token」填好就行。**
@@ -139,11 +141,18 @@
 
 | 選項 | 什麼時候執行 |
 |---|---|
-| 新增畫面載入時 | 使用者開啟「新增記錄」頁面的瞬間 |
-| 編輯畫面載入時 | 使用者開啟「編輯」頁面的瞬間 |
-| 新增儲存前 | 使用者按「儲存」，記錄真正存入前 |
-| 編輯儲存前 | 使用者按「儲存」，記錄真正存入前 |
+| 新增畫面載入時 | 使用者打開「新增記錄」頁面時（含用「再利用」複製舊單） |
+| 編輯畫面載入時 | 使用者打開「編輯」頁面時 |
+| 一覽表內編輯列載入時 | 使用者在一覽表上直接點鉛筆編輯某一列時 |
+| 新增儲存前 | 新增時按「儲存」，記錄還沒存進去之前 |
+| 編輯儲存前 | 編輯時按「儲存」，記錄還沒存進去之前 |
+| 一覽表內編輯存檔前 | 在一覽表上改完按儲存，還沒存進去之前 |
+| 新增存檔後 / 編輯存檔後 | 記錄已經存好之後（適合回寫「這筆新記錄的編號」到別的 App） |
 | **流程推進時** | 使用者按流程動作按鈕（如「核准」「完成」）時 ← 最常用 |
+
+> 💡 同一類的時機可以一起勾，例如「新增畫面載入時」＋「編輯畫面載入時」。「流程推進時」只能單獨勾，避免一條規則混用兩種狀態條件。
+>
+> 🔸 一覽表內編輯有個 kintone 本身的限制：只有放在一覽表上的欄位才存得進去。
 
 ---
 
@@ -175,21 +184,21 @@
 
 > 狀態條件只能用「流程狀態」過濾規則。如果你想要**依某個欄位的值**決定規則跑不跑（例如「只有當『申請類別 = 恢復』才寫入」），就用這裡的「欄位條件」。
 
-在規則卡片的「**欄位條件 (全部成立才執行)**」區塊，點「**＋ 新增條件**」可以加一條或多條：
+在規則卡片的「**欄位條件**」區塊，點「**＋ 新增條件**」可以加一條或多條：
 
 | 設定 | 說明 |
 |---|---|
-| 欄位 | 要比對的欄位（下拉選單，列出本 App 所有欄位） |
-| 運算子 | 等於 / 不等於 / 開頭為 / 包含 |
+| 欄位 | 要比對的欄位（可打字搜尋，列出本 App 所有欄位） |
+| 運算子 | 等於 / 不等於 / 開頭為 / 包含 / 屬於清單 |
 | 比對值 | 要比對的文字 |
 
-**多條條件 = 全部成立（AND）才會執行**。留空（沒有任何條件）= 不限制，跟原本一樣。
+條件上方有 **AND / OR** 切換：AND（預設）＝全部成立才執行，OR＝任一條成立就執行。沒有任何條件＝不限制。
 
 | 運算子 | 意思 | 範例 |
 |---|---|---|
 | 等於 (=) | 欄位值完全相同 | 申請類別 **等於** `恢復` |
 | 不等於 (≠) | 欄位值不同 | 狀態 **不等於** `作廢` |
-| 開頭為 | 欄位值的開頭符合 | 申請類別 **開頭為** `停用`（可match「停用（交易中止）」）|
+| 開頭為 | 欄位值的開頭符合 | 申請類別 **開頭為** `停用`（可比對到「停用（交易中止）」）|
 | 包含 | 欄位值裡含有這段文字 | 備註 **包含** `急件` |
 | 屬於清單（任一） | 欄位值是清單裡的**任何一個**就成立（**用逗號分隔**） | 申請類別 **屬於清單** `變更,恢復,年度定期更新` |
 
@@ -206,8 +215,9 @@
 | 選項 | 說明 |
 |---|---|
 | **寫入本記錄欄位** | 把值填進這筆記錄的某個欄位 ← 最常用 |
+| **批次寫入本記錄** | 一條規則一次設定很多個欄位（清空、固定值、登入者、今天…），適合「再利用」新增時先把欄位整理乾淨（見 ⑪，v1.20.0） |
 | **寫入其他 App 記錄** | 把值寫進另一個 App 的記錄 |
-| **跳出提醒視窗** | 不寫任何欄位，跳一個提醒視窗；按下確定後才繼續執行後面的規則（見 ⑩，v1.15.0） |
+| **跳出提醒視窗** | 不寫任何欄位，只跳提醒視窗；按下確定後才繼續執行後面的規則（見 ⑩，v1.15.0） |
 
 ---
 
@@ -233,11 +243,15 @@
 | **當前狀態** | 推進前的狀態名稱 | 文字、下拉 |
 | **流程動作名稱** | 按下的那顆按鈕名稱（如「核准」） | 文字 |
 | **從本記錄欄位複製** | 把另一個欄位的值複製過來 | 同型別欄位 |
-| **簡易計算式** | 用欄位做四則運算 | 數字 |
+| **簡易計算式** | 用欄位做四則運算，也能把幾個欄位串成一段文字 | 數字、文字 |
 | **日期加減期間** | 讀一個日期，加/減 N 天・時・分・月・年，算出新日期 | 日期、日期時間、時間 |
+| **子表某列欄位值** | 讀子表格某一列（預設最後一列）的某個欄位 | 依來源欄位 |
+| **跨 App 查詢** | 到另一個 App 查一筆記錄，取回某個欄位的值 | 依來源欄位 |
+| **文字串接追加** | 在原本的文字後面再接一段，重複的不會再接一次 | 文字 |
+| **附件檔案複製** | 把另一個附件欄位的檔案複製過來（只能用在「存檔後」） | 附件 |
 | **清空** | 把欄位清成空白 | 全部 |
-| **唯讀鎖定** | 隱藏欄位讓使用者無法編輯 | 全部（限「載入時」觸發） |
-| **Append 子表一筆** | 在子表格新增一列履歷記錄 | 子表格 |
+| **唯讀鎖定** | 不讓使用者改這個欄位（欄位照常顯示，但變成灰色不能編輯） | 全部（限「載入時」觸發） |
+| **Append 子表一筆** | 在子表格新增一列（常用來記簽核履歷） | 子表格 |
 
 ---
 
@@ -249,7 +263,8 @@
 | 從本記錄欄位複製 | 來源欄位的**欄位代碼** | `客戶代號` |
 | 簡易計算式 | 計算公式，欄位代碼用 `{}` 包起來 | `{数量}*{単価}` |
 | 日期加減期間 | JSON 格式（見第 6 節範例 E） | — |
-| Append 子表一筆 | JSON 格式（見第 6 節範例） | — |
+| 子表某列欄位值、跨 App 查詢、文字串接追加、附件檔案複製 | JSON 格式，輸入框裡有範例可照抄 | — |
+| Append 子表一筆 | 不用打 JSON：選好子表格後，下面會列出子欄位讓你逐列點選（v1.19.0）；按「⚡ 流程履歷範本」可一鍵帶入常用的履歷欄位 | 見第 6 節範例 B |
 
 > **欄位代碼在哪裡找？**
 > App 設定 →「表單」→ 點欄位 → 右側「欄位代碼」
@@ -267,13 +282,13 @@
 
 | 欄位 | 說明 |
 |---|---|
-| 寫入模式 | 新增 / 更新（依 key 找）/ Upsert（有就更新，沒有就新增） |
-| 目標 App ID | 目標 App 的數字 ID |
-| Key 對應 | 用哪個欄位去目標 App 找到正確那筆（JSON 格式） |
-| 欄位對應 | 要寫哪些欄位、寫什麼值（JSON 格式） |
+| 寫入模式 | 新增 / 更新（依 Key 找）/ Upsert（有就更新，沒有就新增） |
+| 目標 App ID | 目標 App 的數字 ID。輸入後按 Enter，下面的欄位下拉選單就會列出目標 App 的欄位 |
+| Key 對應 | 用哪個欄位去目標 App 找到正確的那一筆 |
+| 欄位對應 | 要寫目標 App 的哪些欄位、寫什麼值 |
 | 失敗處理 | 寫入失敗時要擋下儲存 / 只記錄錯誤 / 忽略 |
 
-> JSON 格式的詳細說明請參考「寫入其他App教學.md」（或請工程師協助設定）
+> Key 對應與欄位對應都是一列一列點選：左邊選目標 App 的欄位，右邊選值的來源（v1.8.0）。習慣直接寫 JSON 的話，按旁邊的「{ } JSON」也可以。
 
 ---
 
@@ -339,6 +354,27 @@
 
 ---
 
+### ⑪ 批次寫入本記錄（v1.20.0）
+
+動作選「**批次寫入本記錄**」時，下面會出現一張欄位清單。按「**＋ 新增欄位**」一列一列加，每一列設定：
+
+| 欄位 | 說明 |
+|---|---|
+| 目標欄位 | 要處理的欄位。一般欄位、使用者選擇、組織／群組選擇、子表格都能選 |
+| 值的來源 | 預設是「清空」。也可以選固定值、登入者、今天、從本記錄欄位複製、簡易計算式、唯讀鎖定等 |
+| 僅在空白時才寫入 | 每一列各自勾，勾了就不會蓋掉已經有值的欄位 |
+
+清單由上往下依序寫入。幾個要注意的地方：
+
+- **使用者／組織／群組選擇**的固定值請填**代碼**（登入名稱、組織代碼），多個用逗號分隔，例如 `user01,user02`。
+- **子表格**只能「清空」或「唯讀鎖定」。清空後會留一列空白列，跟新增畫面原本的樣子一樣。要新增有內容的列，請改用「寫入本記錄欄位」＋「Append 子表一筆」。
+- 同一張清單裡不能重複選同一個欄位，存檔時會提醒。
+- 任何觸發時機都能用。用在「流程推進時」也沒問題：簽核人沒有編輯權限時，清單裡的每個欄位都會一起用 Token 補寫。
+
+最常見的用法是搭配「新增畫面載入時」，處理 kintone 的「再利用」。複製舊單時，舊單的備註、承辦人、明細都會跟著帶過來，用一條批次規則就能一次清乾淨（見第 6 節範例 F）。
+
+---
+
 ## 6. 實際設定範例
 
 ### 範例 A：核准時自動填寫核准日期與核准者
@@ -374,7 +410,7 @@
 | 動作 | 寫入本記錄欄位 |
 | 目標欄位 | 流程履歷（子表格欄位） |
 | 值的來源 | Append 子表一筆 |
-| 值的參數 | （填入以下 JSON） |
+| 子欄位對應 | 逐列選子欄位與值的來源，結果等同下面這段 JSON |
 
 ```json
 {
@@ -389,6 +425,8 @@
 ```
 
 > ⚠️ `targetField` 填的是子表格**內部欄位**的欄位代碼，不是子表格本身的代碼。
+>
+> 💡 勾「履歷模式」後，新增畫面會自動清空這張子表格，新增／編輯畫面也會把它藏起來，只能由外掛寫入，避免有人手動改履歷。
 
 ---
 
@@ -480,17 +518,41 @@
 
 ---
 
+### 範例 F：用「再利用」新增時，一次把欄位整理好（v1.20.0）
+
+情境：使用者常用「再利用」複製上一張申請單，但備註、承辦人、明細不該沿用，申請人要換成自己、申請日期要換成今天。
+
+| 設定項目 | 填入值 |
+|---|---|
+| 觸發時機 | 新增畫面載入時 |
+| 動作 | 批次寫入本記錄 |
+
+欄位清單：
+
+| 目標欄位 | 值的來源 | 值 |
+|---|---|---|
+| 備註 | 清空 | — |
+| 承辦人（使用者選擇） | 清空 | — |
+| 明細（子表格） | 清空 | — |
+| 申請人（使用者選擇） | 登入者 | — |
+| 申請日期 | 今天 | — |
+| 審核窗口（使用者選擇） | 固定值 | `user01,user02` |
+
+> 💡 這條規則在一般「新增」時也會跑，只是欄位本來就是空的，看不出差別。如果某個欄位有預設值不想被清掉，那一列就勾「僅在空白時才寫入」，或乾脆不要放進清單。
+
+---
+
 ## 7. 更新外掛版本
 
-> 工程師修改程式後會提供新的 `plugin.zip`。請按以下步驟更新。
+> 工程師改完程式後，會提供新的外掛檔（檔名像 `plugin-v1.20.0.zip`，數字是版本號）。請照下面步驟更新。
 
-**重要：更新不會影響已設定的規則，設定會自動保留。**
+**更新不會影響已經設好的規則，設定會自動保留。**
 
 ### 步驟 1：上傳新版本
 
 1. 系統管理 →「外掛程式管理」
 2. 找到「狀態驅動動作外掛」，點右側「**更新**」按鈕
-3. 選擇新的 `plugin.zip` → 確認上傳
+3. 選擇新的 zip 檔 → 確認上傳
 
 ### 步驟 2：更新各 App
 
@@ -521,16 +583,21 @@
 1. 進入目標 App 的外掛設定頁
 2. 點「**匯入設定**」→ 把剛才複製的 JSON 貼進視窗 → 按「**套用規則**」
 3. 確認提示 → 規則會**取代**目標 App 目前的規則
-4. **檢查無誤後按「儲存」→「更新 App」** 才會生效
+4. 如果貼上的內容含有 Token，會再問一次（v1.19.0）：
+   - **同一個 App 還原備份** → 選「一併套用」
+   - **複製到另一個 App** → 選「只套規則」
+5. **檢查無誤後按「儲存」→「更新 App」** 才會生效
 
-### ⚠️ 匯入只會帶「規則」，這兩件事要自己確認
+> ⚠️ 匯出的內容是完整備份，**裡面有明碼的 API Token**。請當成機密處理，不要貼到群組、信件或公開的地方。
+
+### ⚠️ 複製到別的 App 時，這兩件事要自己確認
 
 | 項目 | 為什麼 | 要做什麼 |
 |---|---|---|
-| **API Token** | Token 綁在各自的 App，不能跨 App 共用 | 匯入**不會**動目標 App 的 Token／Log 設定；請依第 3、9 節在目標 App 自行填 |
-| **欄位代碼** | 規則寫的是欄位代碼，目標 App 必須有同名欄位 | 確認規則用到的欄位代碼在目標 App 都存在（附錄 A） |
+| **API Token** | Token 是綁在各自 App 上的，不能跨 App 共用 | 選「只套規則」，然後依第 3、9 節在目標 App 自己填 Token |
+| **欄位代碼** | 規則寫的是欄位代碼，目標 App 必須有同樣代碼的欄位 | 確認規則用到的欄位代碼在目標 App 都存在（附錄 A） |
 
-> 💡 之所以「只帶規則、不帶 Token」，就是為了避免把來源 App 的 Token／目標 App ID 誤套到別的 App 造成寫錯地方。Token 類設定一律在各 App 自己填一次最安全。
+> 💡 複製到別的 App 時不要帶 Token，是為了避免把來源 App 的 Token、App ID 誤用到別的 App，寫錯地方。各 App 的 Token 自己填一次最保險。
 
 ---
 
@@ -577,9 +644,9 @@
 
 1. **欄位代碼對不對** — 條件的「欄位」要選對，下拉會顯示 `名稱 (代碼) [類型]`
 2. **比對值要完全相同** — 「等於」會比對到一模一樣（注意全形半形、前後空格）。值有變化形（如「停用（交易中止）」）時改用「**開頭為**」
-3. **多條條件是 AND** — 全部成立才執行；只要一條不符合整條規則就跳過
-4. **下拉/核取方塊欄位** — 目前是用文字比對單一值，多選欄位請改用「包含」
-5. 若有設定「執行 Log」（見第 9 節），可到 Log App 查 `LOG_RESULT`／`LOG_MESSAGE` 確認該次推進是否命中規則。發生錯誤時 `console.error`／`console.warn` 仍會印在 F12 Console（v1.3.0 已移除大量除錯用 `console.log`，畫面更乾淨）
+3. **看清楚是 AND 還是 OR** — 預設 AND（全部成立才執行，一條不符就跳過）；切到 OR 則任一條成立就執行
+4. **想比對好幾個值** — 用「屬於清單」並以逗號分隔，不要用「包含」。核取方塊、複選這類多值欄位，只要其中一個選項符合就算成立
+5. 若有設定「執行 Log」（見第 9 節），可到 Log App 查 `LOG_RESULT`／`LOG_MESSAGE` 確認該次推進是否命中規則。出錯時 F12 Console 也會有 `[sda]` 開頭的紅字或黃字
 
 ---
 
@@ -604,8 +671,8 @@
 | 欄位代碼 (Field Code) | 欄位類型 | 內容 |
 |---|---|---|
 | `LOG_EVENT` | 單行文字 | 觸發的事件（如 `process.proceed`） |
-| `LOG_RESULT` | 單行文字 | `成功` 或 `失敗` |
-| `LOG_CATEGORY` | 單行文字 | 分類：`success`／`session`／`permission`／`config`／`system` |
+| `LOG_RESULT` | 單行文字 | `成功`／`失敗`／`取消` |
+| `LOG_CATEGORY` | 單行文字 | 分類：`success`／`cancelled`／`session`／`permission`／`config`／`system` |
 | `LOG_APP` | **數值** | 來源 App 的 ID |
 | `LOG_RECORD` | **數值** | 來源記錄的編號 |
 | `LOG_USER` | **使用者選擇** | 觸發事件的操作者 |
@@ -644,7 +711,8 @@
 填好按「**儲存**」→ 回到 App「**更新 App**」即生效。
 
 > 🔸 只有 `create.submit`／`edit.submit`／`process.proceed` 且**至少命中一條規則**（或外掛本身發生例外）時才會寫 log，避免每次空白送出都產生噪音記錄。
-> 🔸 寫 log 失敗**絕不會**阻擋使用者存檔。若整筆寫入失敗（通常是欄位代碼/類型設錯），外掛會**自動用最小欄位（`LOG_EVENT`／`LOG_RESULT`／`LOG_MESSAGE`）重試一次**，確保核心訊息至少能落地；兩次都失敗才放棄，並在 F12 Console 留下 `console.error` 說明可能原因。
+> 🔸 想從 Log 一覽表**一鍵進入出問題的來源記錄**：把 [log-app/log_app_quick_open.js](log-app/log_app_quick_open.js) 上傳到 Log App 的 JavaScript 自訂（電腦版＋手機版），每一筆 Log 都會出現「開啟 ↗」，記錄詳細畫面上方也有「開啟來源記錄」。說明見 [log-app/README.md](log-app/README.md)。
+> 🔸 寫 log 失敗**絕不會**阻擋使用者存檔。若整筆寫入失敗（通常是欄位代碼/類型設錯），外掛會**自動用最小欄位（`LOG_EVENT`／`LOG_RESULT`／`LOG_MESSAGE`）重試一次**，至少保住核心訊息；兩次都失敗才放棄，並在 F12 Console 留下 `console.error` 說明可能原因。
 
 ---
 
@@ -727,7 +795,7 @@
 
 填好按「**儲存**」→ 回到 App「**更新 App**」即生效。
 
-### ⚠️ 三件要知道的事
+### ⚠️ 四件要知道的事
 
 1. **權限完全等同操作者本人。** 記錄的讀取、修改、刪除都用操作者自己的身分，不套任何 API Token。
    看不到的記錄不會出現在表格裡；沒有編輯權的列會標「🔒唯讀」；沒有刪除權的列會被刪除動作跳過並回報。
@@ -748,6 +816,36 @@
 | 提示「已達上限」 | 篩選範圍超過掃描上限，請在一覽表縮小篩選條件再按 |
 | 開了「限制可使用對象」但自己也看不到按鈕 | 檢查自己的登入代碼／部門／群組是否真的在名單裡；部門／群組限制沒填共通管理 API 權杖時一律視為不符合 |
 | 「限制可使用對象」搜尋不到人／部門／群組 | 沒填第 1 區的共通管理 API 權杖就無法搜尋，該欄會改成純文字輸入；填好權杖後重新整理設定頁再試 |
+
+---
+
+## 11. 主資料庫欄位對照（v1.21.0）
+
+設定畫面第 6 區。指定本 App 與一個「主資料庫 App」之間，哪些欄位要：
+
+| 勾選欄 | 作用（由本 App 的自訂 JS 執行） |
+|---|---|
+| 從資料庫帶回 | 從主資料庫取值帶回本 App 的欄位 |
+| 差異比對 | 標示本 App 與主資料庫不同的欄位 |
+
+外掛本身**不會**依這份設定讀寫任何資料，只是把清單提供給 App 自訂 JS（`window.NXSdaDbFieldMap`），
+讓欄位調整不必改程式。**寫入主資料庫**請用第 2 區「寫入其他 App」規則依條件設定。
+
+1. 勾「啟用」→ 填主資料庫 App ID，畫面會列出兩邊都存在、欄位代碼相同的欄位（附件、系統欄位不列）。
+2. 用表頭勾選框可一次勾選目前列出的全部欄位；可搜尋、篩選。
+3. 型別不同、子表格內部欄位不一致會出現 ⚠ 提醒；曾設定但已刪除的欄位以紅色列置頂，儲存時自動移除。
+4. 「匯出設定」會一併帶出本區；匯入到另一個 App 時，若該 App 已填主資料庫 App ID 會保留不覆蓋。
+5. **轉換規則**（表格下方）：帶回時把主資料庫**一個欄位**依條件**拆寫到本 App 多個欄位**。
+   - 前處理：全形轉半形、去空白、正規式取代（例：`^月結(\d+)日$` → `月結$1天`）。
+   - 條件由上而下比對，第一個符合的生效：空值／等於某下拉欄位的選項之一／等於／包含／符合正規式／其他。
+   - 每個條件可寫入多個欄位，值可用 `{value}`（前處理後）、`{raw}`（原始值）、`$1`～`$9`（正規式群組）；可附提醒訊息。
+   - 寫入下拉／選項欄位時，值不是該欄位選項 → 該條件視為不符，改試下一個（避免寫入無效選項）。
+   - 被轉換規則寫入的欄位，不再由上表「從資料庫帶回」直接複製。
+   - 「試算」可輸入一個值立即看結果；「複製 JSON」／「貼上 JSON 新增」可在 App 之間搬規則。
+   - 範例：營運用供應商申請單的 `plugin_templates/支付條件_轉換規則.json`（支付條件 → 申請人點選＋其他月結天數）。
+
+目前使用者：營運用供應商申請單（710／531）的 04 模組，**必須啟用本區**（該程式已無內建清單，未啟用時不帶入、不比對）；
+固定不帶回、不比對的欄位（簽核通過時間、廠商負責單位）由該程式自行排除；支付條件請匯入該專案的轉換規則範本。該 App 的差異比對沿用「從資料庫帶回」清單，不讀本區的「差異比對」欄。
 
 ---
 
@@ -778,7 +876,7 @@
 
 註冊 9 個「使用者操作」事件：`create.show`、`edit.show`、`index.edit.show`、`create.submit`、`edit.submit`、`index.edit.submit`、`detail.process.proceed`、`detail.show`、`index.show`（另加 `create.submit.success`／`edit.submit.success` 給 Log 確認存檔成功，見 B-8b）。
 
-`index.show`（v1.17.0）**只掛「建立人狀態檢查」按鈕，不跑任何規則**——規則的一覽表時機是 `index.edit.*`。未啟用該功能時 handler 第一行就 return，零成本。
+`index.show`（v1.17.0）**只掛「建立人狀態檢查」按鈕，不跑任何規則**——規則的一覽表時機是 `index.edit.*`。未啟用該功能時 handler 第一行就 return，不會多花任何資源。
 
 - **無** `setInterval`／輪詢／常駐迴圈；唯一的 `setTimeout` 是 `setFieldShown` 的下一個 tick（0ms）。
 - 每次觸發先做快速退出：無規則就立刻 return；需要時間才打 API。對低階電腦無負擔。
@@ -789,7 +887,7 @@
 
 1. 先把規則套用到 `event.record`（記憶體內）。
 2. `checkEditPermission()` 呼叫 `/k/v1/records/acl/evaluate.json` 判斷**當前使用者現在是否可編輯這筆記錄**：
-   - **可編輯** → `return event`（與狀態轉換一起原子儲存）。
+   - **可編輯** → `return event`（跟狀態轉換一起存檔）。
    - **不可編輯 + 有設定本 App Token（selfAppToken）** → 存 `pendingWrite`、`return undefined`；待下一個 `detail.show` 觸發時，用 Token 走 REST `PUT` 補償寫入（compensation write），成功後 `location.reload()`。
    - **不可編輯 + 無 Token** → 仍 `return event`（狀態會轉換，但受欄位權限限制的欄位寫入可能被 kintone 拒絕）。
 3. 補償寫入若失敗，以非阻擋方式提示（`SdaDialog`，見 B-14），記錄狀態仍正確、只是履歷可能漏一列。
@@ -835,7 +933,7 @@
   - 現有值讀取來源依動作而異：`writeSelf` 讀 `ctx.record[targetField]`（本記錄）；`writeOther` 讀 `ctx.targetRecord[targetField]`——只有 `update`／`upsert` 命中既有記錄時才有 `targetRecord`，故 `ruleNeedsTargetRecord` 已納入 `appendText` 判斷（見 B-11），確保這種情況下 GET 會抓整筆而非只抓 `$id`；`upsert` 未命中改走 `create` 時無既有記錄可讀，視為空值，直接寫入新值本身（不加分隔字元）。
   - 目標欄位型別須為文字類（`SINGLE_LINE_TEXT`／`MULTI_LINE_TEXT`）；若目標欄位實際是陣列型（CHECK_BOX 等），`appendText` 算出的字串仍會整串塞進 `classifyWrite` 判定的陣列分割規則，語意上不建議混用——陣列型欄位請改用既有的 `appendMode`（見 B-9）。
   - 與 `skipIfFilled` 併用時：`skipIfFilled` 在目標欄位已有值時會讓整條規則直接跳過（含 `appendText` 本身），等同「只在第一次寫入」，不會進到附加判斷；如需「每次都嘗試附加去重」，`skipIfFilled` 應設為 `false`（或不設）。
-- **`copyAttachment`**（v1.14.0，**附件檔案複製**，**限 `*.submit.success` 觸發**）：`{ from, mode?, maxFileSize?, onError? }`。把來源附件欄位的**檔案本身**複製到目標附件欄位。設計背景與 kintone 限制見 spec `docs/superpowers/specs/2026-07-15-attachment-copy-design.md`。
+- **`copyAttachment`**（v1.14.0，**附件檔案複製**，**限 `*.submit.success` 觸發**）：`{ from, mode?, maxFileSize?, onError? }`。把來源附件欄位的**檔案本身**複製到目標附件欄位。設計背景與 kintone 限制見 spec `docs/specs/2026-07-15-attachment-copy-design.md`。
   - `from`：來源。`{ app, keyField, keyExpr, attachmentField }`。`app` 省略或 `"this"`＝本記錄；否則以 `keyExpr`（`{欄位代碼}` 代換本記錄值）在 `app` 查一筆、讀 `attachmentField`。
   - 目標＝此規則的「目標欄位」（附件欄位）；`writeSelf` 寫本記錄、`writeOther` 寫目標 App 那筆。
   - `mode`：`replace`（預設，覆蓋）／`append`（附加）。附加時**既有檔案會重新上傳保留**（既有下載 key 不可再寫入），並以 `檔名::大小` 去重避免重跑重複附加；`copyAttachment` 一律不吃 `appendMode`（`runWriteSelf` 對此 valueSource 強制 `append:false`），模式只看 `valueParam.mode`。
@@ -844,9 +942,7 @@
   - **認證＝登入者 session**：附件的 binary 下載（`GET /k/v1/file.json`）與 multipart 上傳（`POST /k/v1/file.json`）**都不經外掛 proxy／Token**（proxy 不吃 binary/multipart、加密 Token runtime 讀不到），一律用 `fetch` + `credentials:'include'` + `X-Requested-With`。⇒ **執行者需對來源 App 有下載權、對目標 App 有上傳權**；若對來源無權限則做不到（需後端，非本外掛範疇）。
   - `append` 需目標既有附件，故 `ruleNeedsTargetRecord` 已納入 `copyAttachment(mode:append)`（見 B-11），確保 `writeOther` 撈整筆目標記錄含附件欄位。
 - **`elapsedMinutes`**（僅用於 `appendSubtable` 的 subRules 內）：`{ sinceField: '執行日時' }`，回傳距上一列該時間欄位的分鐘數；第一列回 0。
-- **`readonly`**：唯讀鎖定，僅 `*.show` 時機有意義（v1.9.0 起依觸發事件分兩種機制）：
-  - `index.edit.show`（一覽表內編輯列）：直接對 `ctx.record[targetField].disabled = true` 賦值——欄位仍顯示在該列，但輸入框變灰階不可編輯。`kintone.app.record.setFieldShown` 在一覽表編輯列沒有對應元素，故不適用。
-  - 其餘 `*.show`（`create.show`／`edit.show`）：沿用 `setFieldShown(code, false)` **隱藏欄位**，跟舊版行為相同。
+- **`readonly`**：唯讀鎖定，僅 `*.show` 時機有意義。對 `ctx.record[targetField].disabled = true` 賦值（隨 `return event` 生效）——欄位照常顯示，但輸入框變灰階不可編輯；`create.show`／`edit.show`／`index.edit.show` 皆同一機制。v1.9.0～v1.21.0 在 `create.show`／`edit.show` 是用 `setFieldShown(code, false)` 隱藏欄位，v1.21.1 起改為一律 `disabled`、不再隱藏（要隱藏請用 kintone 欄位權限或另寫自訂 JS）。`*.submit`／`process.proceed` 不做任何事。
 
 ### B-7. 子表格「履歷模式」（historyMode）
 
@@ -861,7 +957,7 @@
 
 - 「目標欄位」只列本 App 的 SUBTABLE（`SUBTABLE_OPTIONS`）；子欄位清單來自 `loadCcFields` 讀 `/k/v1/preview/app/form/fields.json` 時一併解析 SUBTABLE 的 `fields`，存進 `SUBTABLE_FIELDS[子表代碼]`。
 - 每列＝子欄位（`fieldCombo`，可搜尋）⇐ 值來源（`SUB_VALUE_SOURCES`＝`MAPPING_VALUE_SOURCES` 去掉 `appendText`／`copyAttachment`，加上 `elapsedMinutes`）＋參數；`elapsedMinutes` 的 `sinceField` 改為下拉，只列該子表的 DATETIME 子欄位。
-- `historyMode` 為勾選框；「⚡ 流程履歷範本」一鍵帶入 日期與時間／變更前的狀態／動作／變更後的狀態／簽核人員／經過的時間_分（`HISTORY_PRESET`，子欄位代碼不符時會依欄位名稱對回代碼）；保留「{ } JSON」進階編輯退路。
+- `historyMode` 為勾選框；「⚡ 流程履歷範本」一鍵帶入 日期與時間／變更前的狀態／動作／變更後的狀態／簽核人員／經過的時間_分（`HISTORY_PRESET`，子欄位代碼不符時會依欄位名稱對回代碼）；保留「{ } JSON」進階編輯。
 - 子欄位代碼不存在於子表時，該列即時顯示紅字，`validate()` 也會擋下儲存。
 
 ### B-8. 執行 Log（v1.3.0）
@@ -893,6 +989,8 @@
 ### B-9. 欄位值寫入判別（classifyWrite）
 
 依目標欄位現況與來源值分三類：`userObject`（loginUser 物件 → USER_SELECT 陣列）、`arrayField`（CHECK_BOX/MULTI_SELECT/USER_SELECT 等陣列欄位，字串會用 `,;換行` 拆分；`appendMode` 可保留原值去重合併）、`scalar`（一般純量欄位）。
+
+v1.20.0 起 `writeToField` 先依 `record[code].type` 特判：`SUBTABLE` 只接受清空（呼叫 `initSubtableOnCreate` 保留一列空白列，非空值警告略過）；`USER_SELECT`／`ORGANIZATION_SELECT`／`GROUP_SELECT` 經 `toEntityList` 轉成 `[{code}]`（字串以 `,;換行，、` 拆分、單一物件如 loginUser 包成陣列），`appendMode` 以 `code` 去重合併。
 
 ### B-10. 規則比對（conditions）
 
@@ -934,14 +1032,14 @@
 - 設定頁工具列加 `exportConfig` / `importConfig` 兩鈕（皆呼叫 `openTextModal` 自製覆蓋層 modal，內含 readonly/可編輯 `textarea`，不依賴 `prompt`）。
 - **匯出**：`buildFullExport()` → `navigator.clipboard.writeText`（失敗則退回手動全選複製），同時開 readonly modal 顯示。v1.19.0 起匯出為**完整備份**：每條規則以 `RULE_DEFAULTS` 補齊所有選填鍵（dialog 規則另補 `dialog` 全部鍵），`dialogStyle`／`creatorCheck` 補齊預設值，並明確帶出 `selfAppToken`／`tokens[].token`／`logAppId`／`logToken`／`adminApiToken`（設定頁開啟時已從加密代理設定讀回明碼），另加 `exportedFromApp`／`exportedAt`。內容**含明碼 API Token**（與 B-12「不可 `console.log` config」同等敏感，匯出檔請當機密處理）。
 - **匯入時的 Token（v1.19.0）**：若貼上的 JSON 含任何 Token／Log 設定，確認取代規則後會再問一次：「一併套用」（同 App 還原備份）或「只套規則」（複製到別的 App，維持下段的舊行為）。選一併套用時覆寫 `selfAppToken`／`tokens`／`logAppId`／`logToken`／`adminApiToken`，按「儲存」後照常寫入加密代理設定。
-- **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules）與 `parsed.dialogStyle`（v1.15.0，有才套用），`confirm` 後寫回 `state` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。`dialogStyle` 之所以帶、Token 之所以不帶，判準是「是不是本 App 專屬的機密或識別碼」——外觀兩者皆非，且不跟著走的話匯入的提醒規則會長得跟來源 App 不一樣。匯入後僅改記憶體 `state`，按「儲存」才 `setConfig` 落地。
+- **匯入**：解析貼上的 JSON，**只取 `parsed.rules`**（或最外層即陣列時當作 rules）與 `parsed.dialogStyle`（v1.15.0，有才套用），`confirm` 後寫回 `state` 並 `render()`；**刻意不覆蓋** `selfAppToken`／`tokens`／`logAppId`／`logToken`，避免把來源 App 的 Token／App ID 誤帶到別的 App。`dialogStyle` 之所以帶、Token 之所以不帶，判準是「是不是本 App 專屬的機密或識別碼」——外觀兩者皆非，且不跟著走的話匯入的提醒規則會長得跟來源 App 不一樣。匯入後僅改記憶體 `state`，按「儲存」才用 `setConfig` 存進去。
 
 ### B-12c. 存檔後觸發 `*.submit.success`（v1.13.0）
 
 `create.submit.success` / `edit.submit.success` 除了原本寫 Log，現在也會跑 `runSuccessRules`，可當成一般規則的觸發時機。
 
 - **用途**：`create.submit` / `edit.submit` 在「存檔前」執行，新增時記錄尚無 `$id`，無法把「這筆新記錄的編號」回寫來源單。`*.submit.success` 在「存檔後」執行，`event.recordId` 已存在，適合這種回寫（例如把本筆請款單的 `$id` 追加到來源請購單的「請款單據編號」欄位）。
-- **執行方式**：比照 `runProceedRulesViaApi`——以 API 重取整筆記錄（含 `$id`、完整子表、附件欄位），跑命中規則；本表 `writeSelf` 變更以 API `PUT` 落地（success 階段 `event.record` 已無法直接改存），跨 App `writeOther` 照常。全段包在 try/catch，任何錯誤只記 console，**絕不中斷已完成的存檔**。
+- **執行方式**：比照 `runProceedRulesViaApi`——以 API 重取整筆記錄（含 `$id`、完整子表、附件欄位），跑命中規則；本表 `writeSelf` 的變更以 API `PUT` 寫回（success 階段 `event.record` 已無法直接改存），跨 App `writeOther` 照常。全段包在 try/catch，任何錯誤只記 console，**絕不中斷已完成的存檔**。
 - **設定畫面**：觸發時機新增「新增存檔後」「編輯存檔後」兩個複選項，自成一組（`submitSuccess`），與「顯示類 / 儲存前」不可混選。
 - **狀態條件**：走 `statusMatches` 的 default 分支，以 `statusCond` 比對當前記錄的「狀態」（與 `edit.submit` 相同；無流程管理的 App 用 `*` 即全部命中）。
 - **回寫來源單範例**（把本筆 `$id` 追加到來源 App 的「請款單據編號」，以「來源單號」為 key）：
@@ -984,13 +1082,22 @@
 
 ### B-13. 重新打包
 
-修改 `dist/*.js` 後，用簽章私鑰 `.ppk` 重新打包（私鑰已 `.gitignore`，請另外安全保管）：
+修改 `dist/*.js` 後，在外掛資料夾執行 `build.ps1`：
 
-```
-npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
+```powershell
+.\build.ps1 1.20.1          # 指定版本號
+.\build.ps1 patch           # 目前版本自動 +1（也可用 minor / major）
+.\build.ps1                 # 不帶參數會詢問版本，直接按 Enter＝沿用目前版本
+.\build.ps1 1.20.1 -Force   # 覆蓋已經存在的同版本 zip
 ```
 
-使用相同 `.ppk` 可維持**相同 plugin ID**，於 kintone 後台「更新」即可覆蓋升級、設定自動保留。
+它會依序：改 `manifest.json` 的 `version` 與 `config.js` 的 `UI_VERSION` → 把 `desktop.js` 同步到 `mobile.js` → 檢查語法、檢查有沒有印出設定或 Token 的 `console.log` → 用資料夾裡的 `.ppk` 打包成 `plugin-v<版本>.zip`。版本格式不對、同版本 zip 已存在（要加 `-Force`）會直接停下來；版本比目前低則會跳警告。
+
+PowerShell 不讓執行腳本時，改用 `powershell -ExecutionPolicy Bypass -File .\build.ps1 1.20.1`。
+
+不用腳本也可以手動打包：`npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip`（記得先同步 `mobile.js`、自己改兩處版本號）。
+
+私鑰 `.ppk` 已列在 `.gitignore`，請另外妥善保管。用同一把 `.ppk` 打包才能維持**相同的 plugin ID**，kintone 後台按「更新」就能覆蓋升級，各 App 的設定會保留。
 
 ### B-14. 提醒視窗（`action: 'dialog'`，v1.15.0）
 
@@ -1013,13 +1120,13 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 }
 ```
 
-全域外觀存在 `state.dialogStyle`（`width`／`fontSize`／`lineHeight`／`titleSize`／`radius`／`overlay`／`accent`／`buttonColor`／`align`／`customCss`），非機密，隨匯出匯入走（見 B-12a）。
+全域外觀存在 `state.dialogStyle`（`fontSize`／`lineHeight`／`titleSize`／`radius`／`overlay`／`accent`／`buttonColor`／`align`／`customCss`），非機密，會跟著匯出匯入一起走（見 B-12a）。`width` 已於 v1.16.0 拿掉，寬度完全依內容自動決定。
 
 **runtime 接點（`desktop.js`）**
 
 - `applyRules` 的 selfRules 迴圈開頭分流 `rule.action === 'dialog'` → `await runDialog(rule, ctx)`。回傳 `false` 時寫 `_runInfo.cancelled`、設 `event.error = dialog.cancelMessage` 並 `return event`，因此**中止點就是它在規則清單裡的位置**；排在它之前的規則已經跑完、之後的不會跑。`writeOther` 一律在所有 selfRules 之後執行，故必定被擋。
 - `interpolateFields` 以 `/\{([^}]+)\}/` 代換記錄欄位值（沿用 `formula`／`keyExpr` 的 `{}` 慣例）；多值欄位取 `name || code` 以 `、` 串接；欄位不存在代成空字串並 `console.warn`。
-- **可中止判別**：`ctx.trigger === 'process.proceed' || /\.submit$/.test(ctx.trigger)`。只有這些時機 kintone 會等 handler 回傳的 Promise。不符時 `cancelLabel` 強制清空，視窗只出現確定鍵——`*.show` 畫面已渲染完、`*.submit.success` 記錄已存檔，讓使用者以為能取消是騙人的。
+- **可中止判別**：`ctx.trigger === 'process.proceed' || /\.submit$/.test(ctx.trigger)`。只有這些時機 kintone 會等 handler 回傳的 Promise。不符時 `cancelLabel` 強制清空，視窗只出現確定鍵——`*.show` 畫面已渲染完、`*.submit.success` 記錄已存檔，否則使用者會誤以為按取消有用。
 - `runProceedRulesViaApi` 傳 `noBlock: true`：狀態已由 REST API 推進完畢，取消無法回滾。
 - `runSuccessRules` 走 `*.submit.success`，可中止判別本來就是 false，不需另外傳旗標。
 - **Log**：`loggedApply` 在既有失敗分支**之前**先判 `_runInfo.cancelled`，寫 `result: '取消'` / `category: 'cancelled'`。使用者主動取消是正常操作，混進 `system`／`config` 會讓錯誤統計失真。
@@ -1029,13 +1136,13 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 `SdaDialog.show()` 在**呼叫當下**偵測 `window.Swal`：有就用 SweetAlert2，沒有才用內建的原生元件。兩條路的回傳值語意完全相同（`true`＝確定／`false`＝取消），呼叫端不需要知道用了哪一個。
 
 - **偵測時機必須在 `show()` 內，不可在載入時做。** 外掛 JS 可能早於 App 自訂 JS 執行，載入當下 `window.Swal` 還不存在，但事件觸發時它已經在了。
-- **樣式一律以 `.sda-swal` / `.sda-swal-container` 收斂**（`customClass` 指定），避免外掛的寬度、字級設定去污染 App 自己呼叫的 SweetAlert2。
+- **樣式一律限定在 `.sda-swal` / `.sda-swal-container` 底下**（`customClass` 指定），避免外掛的寬度、字級設定去污染 App 自己呼叫的 SweetAlert2。
 - `.swal2-container.sda-swal-container` 的 `z-index` 拉到 `100000`：SweetAlert2 預設 1060，會被設定畫面自製的 `openTextModal`（9999）蓋住。
-- **`accent` 停在預設值 `#f5a623` 時，不覆寫 SweetAlert2 的圖示配色**，讓它保持原生的淺橘圈線＋深橘驚嘆號。管理者改成別的顏色才會覆寫——沒表達意見就不要把它壓平。
+- **`accent` 停在預設值 `#f5a623` 時，不覆寫 SweetAlert2 的圖示配色**，讓它保持原生的淺橘圈線＋深橘驚嘆號。管理者改成別的顏色才會覆寫——管理者沒改，就維持原樣。
 - **`success` / `error` 圖示一律用語意色**（`#a5dc86` / `#f27474`），`accent` 不介入。SweetAlert2 這兩個圖示由多個子元素組成（勾線、叉線各有底色），只改 `border-color` 與 `color` 會得到半染色的結果；兩種渲染器在這點行為一致。
 - 呼叫 `Swal.fire` 若同步拋錯，`catch` 後退回內建元件，不會讓整條規則失敗。
 
-**設定畫面的誠實揭露**：外掛設定畫面是 kintone 管理端頁面，不一定載得到全域的 SweetAlert2。「4. 提醒視窗外觀」會以 `SdaDialog.hasSwal()` 偵測並顯示綠色（偵測到）或橘色（未偵測到，預覽改用內建元件、與實際可能有出入）提示。
+**設定畫面會提示預覽是否準確**：外掛設定畫面是 kintone 管理端頁面，不一定載得到全域的 SweetAlert2。「4. 提醒視窗外觀」會以 `SdaDialog.hasSwal()` 偵測並顯示綠色（偵測到）或橘色（未偵測到，預覽改用內建元件、與實際可能有出入）提示。
 
 **自適應寬度與圖示動畫（v1.16.0）**
 
@@ -1043,7 +1150,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 - **寬度沒有上限、也沒有對應的設定項目**：`.sda-dlg` 用 `width:auto; min-width:280px`，SweetAlert2 傳 `width:'auto'` 並以 `.sda-swal{max-width:none}` 解掉 SweetAlert2 自帶的 `max-width:100%`（不解就長不出容器寬度）。`dialogStyle.width` 已從樣式模型移除，舊設定殘留的該鍵會被忽略。
 - **遮罩改成 `overflow:auto` + 視窗 `margin:auto` 置中**，並拿掉 flex 的 `align-items/justify-content: center`。原因：flex 的置中對齊在內容超出容器時會把**起始邊裁掉且捲不回去**，左側文字會永久看不到。`margin:auto` 沒有這個問題，超寬時遮罩整片可捲。
 - **`@media (max-width:600px)` 恢復 `pre-wrap` 並補回 `max-width:92vw`**：14px 的 40 個全形字約 560px，超過手機螢幕寬度。堅持不換行等於逼手機使用者左右滑才讀得完提醒，這條斷點是刻意的取捨——電腦版照管理者排的版，手機版保可讀性。該區段排在 `customCss` 之前，管理者仍可覆寫。
-- 內建元件的圖示改用 SVG：圓環與勾／叉都以 `stroke-dasharray` + `stroke-dashoffset` 動畫畫出來（`.sda-dlg-ring` / `.sda-dlg-mark`），`warn`／`info`／`question` 保留文字字元（`.sda-dlg-glyph`）只讓圓環動。目的是讓「沒有 SweetAlert2 時的退路」不會明顯比較廉價——`success` 少了打勾動畫是最容易被一眼看出來的差異。
+- 內建元件的圖示改用 SVG：圓環與勾／叉都以 `stroke-dasharray` + `stroke-dashoffset` 動畫畫出來（`.sda-dlg-ring` / `.sda-dlg-mark`），`warn`／`info`／`question` 保留文字字元（`.sda-dlg-glyph`）只讓圓環動。目的是讓「沒有 SweetAlert2 時的備用元件」不會明顯比較廉價——`success` 少了打勾動畫是最容易被一眼看出來的差異。
 - `success`／`error` 的圓環用 `opacity:.32`（比照 SweetAlert2 的淡色環），其餘用 `.78`。
 - 全部動畫都在 `@media (prefers-reduced-motion: reduce)` 下關閉。
 
@@ -1054,7 +1161,7 @@ npx @kintone/plugin-packer contents --ppk <你的.ppk> --out plugin.zip
 
 **設定畫面不再使用原生 `alert` / `confirm`（v1.16.0）**
 
-`config.js` 的所有提示與確認改走 `notify()` / `askConfirm()`，兩者都是 `SdaDialog.show()` 的薄包裝（僅在 `SdaDialog` 本身未載入時才退回原生，確保訊息不會消失）。連帶調整：
+`config.js` 的所有提示與確認改走 `notify()` / `askConfirm()`，兩者都只是包一層 `SdaDialog.show()`（僅在 `SdaDialog` 本身未載入時才退回原生，確保訊息不會消失）。連帶調整：
 
 - `openTextModal` 的確定鈕改為 `async`（`await onConfirm(...)`），因為「匯入設定」需要在 modal 內再跳一層確認並依結果決定要不要關閉 modal。
 - 儲存成功的提示改為 `.then()` 後才 `location.href` 跳轉——原本 `alert` 是同步阻塞，換成非同步視窗後若不等它關閉，導頁會把訊息一起帶走。
@@ -1124,7 +1231,7 @@ runtime（`desktop.js`）本身仍然走加密代理（`kintone.plugin.app.proxy
 
 - **一次抓全部、之後全在瀏覽器篩選**，不是每打一個字就打一次 API。共通管理 User API（`/v1/users.json`／`/v1/organizations.json`／`/v1/groups.json`）不支援關鍵字模糊搜尋，只能用 `codes`/`ids`/`size`/`offset` 精確查或分頁列舉，所以 `ccFetchAllPages(kind)` 用 `size=100` + `offset` 分頁把整份名單（使用者／部門／群組）抓完（上限 50 頁＝5000 筆，與 runtime `ccFetchUsersAll` 的上限一致），`ensureCcDirectory(kind)` 快取結果到 `CC_DIRECTORY[kind]`（`idle`／`loading`／`done`／`error` 四態），同一次設定畫面 session 只抓一次。抓的時候直接用 `fetch` + `Authorization: Bearer`，理由與「測試連線」相同：這裡是外掛設定畫面，`kintone.plugin.app.proxy` 在這個情境下不可靠（見上一節）。
 - **`searchAddInput(options, onPick, placeholder)`**：套用既有的 `.sda-ss-*` 樣式（跟規則編輯器的 `searchableSelect`／`fieldCombo` 同一組 CSS，設定畫面視覺一致），差別是「選中即呼叫 `onPick` 並清空輸入框」而非「設成目前值」——這樣才能連續加好幾個人不用重新點欄位。列表本身也做了 50 筆的顯示上限，避免大型租戶一次渲染幾千個 `<div>`。
-- **`renderCodePicker(kind, arr)`**：已選的項目顯示成 chip（帶 ✕ 移除鍵），下拉排除已選項目（`dirEntry.opts.filter(o => !arr.includes(o.v))`），避免選兩次。**沒有共通管理 API 權杖時**直接退化成一個「輸入完整代碼、按 Enter 新增」的純文字框——不擋住整個功能，只是失去搜尋能力；沒填權杖也想先把已知代碼打進去的情境仍然可行。chip 上的名稱若名單還沒載入完成，先顯示「代碼（尚未載入名稱）」，名單載入後 `render()` 會補上正確姓名。
+- **`renderCodePicker(kind, arr)`**：已選的項目顯示成 chip（帶 ✕ 移除鍵），下拉排除已選項目（`dirEntry.opts.filter(o => !arr.includes(o.v))`），避免選兩次。**沒有共通管理 API 權杖時**直接退化成一個「輸入完整代碼、按 Enter 新增」的純文字框——不擋住整個功能，只是不能搜尋；沒填權杖也想先把已知代碼打進去的情境仍然可行。chip 上的名稱若名單還沒載入完成，先顯示「代碼（尚未載入名稱）」，名單載入後 `render()` 會補上正確姓名。
 - **顯示欄位清單（`loadCcFields`，v1.18.0）**：不沿用規則用的 `FIELD_OPTIONS`（`KintoneConfigHelper.getFields()` 是**依表單版面**列欄位，沒放進版面的系統欄位、`STATUS`／`STATUS_ASSIGNEE`／`CATEGORY` 永遠不在版面上，而且它還會**濾掉 Lookup 欄位**），改讀 `/k/v1/preview/app/form/fields.json` 的全部頂層欄位。排除 `LABEL`／`SPACER`／`HR`／`GROUP`／`REFERENCE_TABLE`（沒有值可顯示）與 `enabled === false`（流程管理或分類沒開時 `STATUS`／`STATUS_ASSIGNEE`／`CATEGORY` 仍會列出但停用）。排序：`CC_SYSTEM_TYPE_ORDER` 的系統欄位在前、標〔系統〕，其餘依版面順序，版面外的欄位最後。子表格內欄位不列（`records.json` 的 `fields` 只能指定整個子表格）。讀取失敗時退回 `FIELD_OPTIONS`。系統欄位不在 `CREATOR_CHECK_EDITABLE_TYPES`，設定畫面自動顯示「唯讀」。
 - **runtime 顯示**：`ccDisplayValue` 對 `STATUS_ASSIGNEE` 比照使用者選擇列出姓名；`CREATED_TIME`／`UPDATED_TIME` 轉成本地時間 `YYYY-MM-DD HH:mm`。
 
@@ -1134,7 +1241,7 @@ runtime（`desktop.js`）本身仍然走加密代理（`kintone.plugin.app.proxy
 2. **探測一筆記錄認出「建立人」的欄位代碼**：內建欄位代碼會隨 App 建立語系而異（中文 `建立人` / 日文 `作成者` / 英文 `Created_by`），且沒放到表單上時 `form/fields.json` 不一定查得到；`records.json` 一定會回內建欄位，所以用 `limit 1` 撈一筆、找 `type === 'CREATOR'` 的 key，再退回 `form/fields.json`，最後才逐一試 `CC_CREATOR_FALLBACK_CODES`（`建立人` 優先）。同時這一步也負責「沒有記錄」的早退。
 3. `ccFetchRecords`：`kintone.app.getQueryCondition()`（手機版走 `kintone.mobile.app`）+ `limit/offset` 分頁，只取需要的 `fields`（`$id`／`$revision`／建立人／設定的顯示欄位），累積到 `maxRecords` 為止。`getQueryCondition()` 不含 `order by`／`limit`，可直接串接。
 4. `ccFetchUsers`：`/v1/users.json?codes[]=…&size=100`。`size` 上限是 100，所以 codes 也以 100 為一批（`chunk(codes, 100)`）並明示 `size=100`——依賴對方的預設值等於把批次大小的正確性交給別人。回傳裡沒有的 code＝共通管理已刪除（`gone`）；`valid === false`＝停用（`off`）。
-   **退路 `ccFetchUsersAll`**：codes 查詢整批拋錯時（例如某個 code 已刪除而 API 直接回錯而不是略過），改成 `size=100` + `offset` 分頁把全部使用者列出來，上限 50 頁（5000 人）。慢，但不受「查不到的 code」影響。
+   **備案 `ccFetchUsersAll`**：codes 查詢整批拋錯時（例如某個 code 已刪除而 API 直接回錯而不是略過），改成 `size=100` + `offset` 分頁把全部使用者列出來，上限 50 頁（5000 人）。慢，但不受「查不到的 code」影響。
 5. `ccEvaluateRights`：`/k/v1/records/acl/evaluate.json`（一次最多 100 筆 ids）取每筆的 `editable`／`deletable`。查詢失敗時該批視為可編輯可刪除——最終仍由 kintone 擋，寧可讓使用者撞到真正的錯誤訊息，也不要因為輔助查詢失敗就把整個功能鎖死。
 6. 建表、掛事件、`SdaDialog.showPanel()`。有實際改動過（`needsReload`）才在關閉後 `location.reload()`。
 
@@ -1173,7 +1280,7 @@ runtime（`desktop.js`）本身仍然走加密代理（`kintone.plugin.app.proxy
 
 **`SdaDialog.showPanel()`（`dialog.js`）**
 
-`show()` 的表格版：內容是呼叫端給的 `HTMLElement`，面板只負責標題、外框、關閉鍵。有 `window.Swal` 就用 `Swal.fire({ html: node })`，沒有就用內建 `.sda-pnl` 覆蓋層；`onReady({ close })` 讓呼叫端拿到程式化關閉的手把。
+`show()` 的表格版：內容是呼叫端給的 `HTMLElement`，面板只負責標題、外框、關閉鍵。有 `window.Swal` 就用 `Swal.fire({ html: node })`，沒有就用內建 `.sda-pnl` 覆蓋層；`onReady({ close })` 讓呼叫端可以用程式關閉面板。
 
 - **動作鍵一律做在 content 裡，不做成面板按鈕**：SweetAlert2 同時只能開一個視窗，在面板裡再 `fire` 一次確認框會把面板整個換掉。所以刪除的二次確認用**行內紅色確認條**（`.sda-panel-confirm`），不用嵌套視窗。
 - SweetAlert2 那邊要另外把 `.swal2-html-container` 的 `white-space: pre` 解掉（提醒視窗需要 `pre`，表格需要 `normal`，不解會把儲存格硬撐開）——這就是 `.sda-swal-panel` 這個額外 class 存在的唯一原因。
@@ -1187,6 +1294,63 @@ const orgs      = await window.NXSdaUserApi.get('user/organizations.json', { cod
 ```
 
 `get(path, params)` 走同一組代理設定（`/v1/` 前置的 GET），所以 App 自訂 JS 也能查帳號／組織而不接觸權杖。陣列參數自動展開成 `key[]=`。
+
+### B-16. 批次寫入本記錄（`action: 'writeSelfBatch'`，v1.20.0）
+
+一條規則底下放 `items` 陣列，每一列就等於一條精簡版的 `writeSelf`：
+
+```jsonc
+{
+  "trigger": "create.show", "action": "writeSelfBatch",
+  "items": [
+    { "targetField": "備註",     "valueSource": "clear" },
+    { "targetField": "申請人",   "valueSource": "loginUser" },
+    { "targetField": "承辦人",   "valueSource": "fixed", "valueParam": "user01,user02" },
+    { "targetField": "申請日期", "valueSource": "today", "skipIfFilled": true },
+    { "targetField": "明細",     "valueSource": "clear" }
+  ]
+}
+```
+
+- runtime：`runSelfRule` 對 `writeSelfBatch` 依序對每列呼叫 `runWriteSelf({...item})`（`valueSource` 省略＝`clear`），回傳被寫的欄位代碼；`applyRules`／`runProceedRulesViaApi`／`runSuccessRules` 三處都改用 `runSelfRule` 收集 `touchedFields`，所以 `process.proceed` 補償寫入與 `*.submit.success` 回寫都涵蓋批次內所有欄位（`readonly` 列不列入）。
+- 所有觸發時機皆可用；每列支援 `skipIfFilled`、`appendMode`。子表格只能 `clear`（留一列空白列）或 `readonly`；USER_SELECT／組織／群組的固定值填代碼、逗號分隔（見 B-9）。
+- 設定畫面：`renderBatchEditor`，目標欄位清單＝`FIELD_OPTIONS`＋`SUBTABLE_OPTIONS`；值來源＝`BATCH_VALUE_SOURCES`（`MAPPING_VALUE_SOURCES` 去掉 `appendText`/`copyAttachment`，加 `readonly`）；`validate` 檢查空清單、未選欄位、重複欄位、子表格非清空。
+
+### B-17. 主資料庫欄位對照（`dbFieldMap`，v1.21.0）
+
+通用功能：提供「帶回 / 比對」欄位清單給 App 自訂 JS，外掛本身不依此讀寫資料。
+
+```jsonc
+"dbFieldMap": {
+  "enabled": true,
+  "dbAppId": "712",
+  "fields": [ { "code": "地址", "read": true, "compare": true } ]
+}
+```
+
+- runtime：`desktop.js` 在 `Object.freeze(CONFIG)` 後，若 `enabled` 且 `fields` 非空，放出凍結的
+  `window.NXSdaDbFieldMap = { dbAppId, fields, read: [代碼…], compare: [代碼…] }`；未啟用則**不設定**（`undefined`），
+  自訂 JS 應自行退回內建清單。外掛 JS 晚於 App 自訂 JS 載入，自訂 JS 必須在事件中（用到時）才讀。
+- 設定畫面：`renderDbMapSection`。本 App 欄位用 `loadCcFields` 留下的 `FORM_PROPS`（preview API），主資料庫欄位由 `ensureDbMapFields` 以 `/k/v1/app/form/fields.json`（操作者 session）讀取並快取在 `DBMAP_DB`。`buildDbMapRows` 取兩邊交集並排除 `DBMAP_EXCLUDED_TYPES`（附件、系統、版面欄位），附提醒；勾選框直接改 `rows` 再 `sync()` 回 `state.dbFieldMap.fields`，**不呼叫整頁 `render()`**（避免捲動位置跳掉），只有搜尋／篩選／全選重畫 tbody。
+- 儲存：`dbmapFieldsForSave` 只存「有效且至少勾一項」的列；主資料庫欄位未讀到時保留原值不清洗。`validate` 檢查啟用時需有 App ID 且至少一欄。
+- 轉換規則（`dbFieldMap.transforms[]`）：`{ enabled, label, source, normalize: { fullwidth, trim, removeSpaces, replaces: [{ pattern, replace }] }, cases: [{ type, field, text, pattern, sets: [{ field, value }], warn }] }`，`type` ∈ `empty`／`option`／`equals`／`contains`／`regex`／`else`。
+  引擎在共用檔 `dist/dbmap.js`（`window.SdaDbMap`：`normalize`／`evaluate`／`validateTransform`／`targetsOf`），與 `dialog.js` 一樣 desktop／mobile／config **三邊共用、不複製**。`evaluate` 第一個符合的條件生效；寫入值落在有選項的欄位卻不是選項時該條件視為不符。
+  runtime 另提供 `NXSdaDbFieldMap.writeRules`：啟用中、`action: 'writeOther'` 且 `targetApp` 等於本區 `dbAppId` 的規則摘要 `[{ label, writeMode, conditions: [{ field, op, value }], mappings: [{ targetField, valueSource, valueParam }] }]`（`valueParam` 只保留字串），供自訂 JS 檢查「會寫入主資料庫、卻沒設定帶回」的欄位；不含 Token 等設定。
+  runtime 對外提供 `NXSdaDbFieldMap.transformTargets`（所有規則會寫的欄位）與 `applyTransforms(dbRecord, record)`（async；用 `/k/v1/app/form/fields.json` 取下拉選項，快取一次；直接改傳入的 `record`，回傳 `{ touched, warnings, details }`，**不呼叫** `record.set`，由呼叫端自己 set）。
+  設定畫面：`renderDbMapTransforms`（試算用同一個 `SdaDbMap.evaluate`）；`validate` 逐條呼叫 `validateTransform`；儲存／匯出經 `dbmapCleanTransform` 去掉空列。
+- 不含任何特定 App 的欄位或規則；個別 App 的固定規則（例：營運用 04 的 `NEVER_READ`）由該 App 的自訂 JS 自己套用。
+- 匯出：`buildFullExport` 一併輸出 `dbFieldMap`；匯入：`importConfig` 套用 `incomingDbMap`，但本 App 已填的 `dbAppId` 保留（避免測試 App 的主資料庫 ID 帶進正式 App）。
+
+### B-18. 錯誤訊息改以 SweetAlert 視窗顯示（v1.21.0）
+
+會擋下動作的錯誤（`*.submit`／`process.proceed` 的規則失敗、`safeHandler` 捕捉到的例外）一律走 `blockEvent(event, title, text, icon)`。
+**例外：提醒視窗按「取消」**不跳第二個視窗，直接 `event.error = cancelMessage`（使用者剛在視窗按了取消，已知原因，只需原生一行說明）：
+
+- `event.error` 只設短句 `NATIVE_BLOCK_TEXT`（「處理已中止，原因請見訊息視窗」）。kintone 必須靠 `event.error` 才會擋下儲存／流程推進，無法完全拿掉原生訊息。
+- 完整原因暫存在 `_errorDialog`，由 `loggedApply`／`safeHandler` 在 handler 結束前 `flushErrorDialog()`，透過 `SdaDialog.show()` 顯示（有全域 `window.Swal` 時即為 SweetAlert2）。handler 會等使用者按「確定」後才回傳。
+- 顯示前若已有其他 SweetAlert 開著（`Swal.isVisible()`，例如 App 自訂 JS 的錯誤彙整視窗），會每 200ms 等它關閉，避免互相覆蓋。
+- `SdaDialog` 未載入時退回舊行為：把完整訊息放進 `event.error`。
+- 執行 Log 不受影響：失敗訊息仍取自 `_runInfo.error`／`_runInfo.cancelled`，不是 `event.error`。
 
 ---
 
