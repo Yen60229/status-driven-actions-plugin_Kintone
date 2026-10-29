@@ -1,7 +1,7 @@
 (() => {
   'use strict';
 
-  const UI_VERSION = '1.22.0';
+  const UI_VERSION = '1.23.0';
   const PLUGIN_ID = kintone.$PLUGIN_ID;
   const APP_ID = kintone.app.getId();
 
@@ -2017,6 +2017,8 @@
         '直接打多行文字，換行與縮排會原樣顯示。\n文中的 {欄位代碼} 會代換成該記錄的實際值，例如：\n※　首張憑證寫上請款單編號【{請款單編號}】', 9));
       addRow('', el('div', { style: { color: '#6b7480', fontSize: '12px' } },
         ['內文為純文字，不會解析 HTML；要調字級／顏色／寬度請到下方「4. 提醒視窗外觀」。']));
+      addRow('', el('div', { style: { color: '#6b7480', fontSize: '12px', whiteSpace: 'pre-line' } },
+        ['放連結：直接貼網址（https://…）會自動變成連結；要自訂顯示文字用 [顯示文字](網址)，例如 [填寫說明](https://example.com/guide)。\n網址只接受 https:// / http:// / mailto: 或 / 開頭的 kintone 站內路徑，連結一律另開新分頁。']));
 
       addRow('確定鍵文字', textInput(d.confirmLabel, (v) => { d.confirmLabel = v; }, 'OK'));
       addRow('取消鍵文字', textInput(d.cancelLabel, (v) => { d.cancelLabel = v.trim(); render(); },

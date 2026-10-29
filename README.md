@@ -1117,7 +1117,7 @@ PowerShell 不讓執行腳本時，改用 `powershell -ExecutionPolicy Bypass -F
   "dialog": {
     "icon": "warn",              // warn|info|success|error|question|none
     "title": "提醒",
-    "text": "…{欄位代碼}…",       // 純文字，textContent 寫入
+    "text": "…{欄位代碼}…",       // 純文字；[文字](網址) 與裸網址會轉成連結（v1.23.0）
     "confirmLabel": "OK",
     "cancelLabel": "",           // 空 = 純提醒，不顯示取消鍵
     "cancelMessage": "已取消操作。",
@@ -1162,7 +1162,17 @@ PowerShell 不讓執行腳本時，改用 `powershell -ExecutionPolicy Bypass -F
 
 **兩個安全 / 體感決定**
 
-- 內文一律走純文字路徑（內建元件用 `textContent`、SweetAlert2 用 `text:` 而非 `html:`）搭配 `white-space: pre-wrap`：換行縮排原樣保留，且設定內容永遠不會被當成標記解析。
+- 內文一律走純文字路徑搭配 `white-space: pre`：換行縮排原樣保留，且設定內容永遠不會被當成 HTML 解析。唯一例外是連結（v1.23.0，見下）。
+
+**內文連結（v1.23.0）**
+
+- `dialog.js` 的 `buildRichText(text)` 把內文切成 DOM 片段：一般文字一律 `createTextNode`，只有符合 `LINK_RE` 的片段建成 `<a>`。兩種寫法：`[顯示文字](網址)`（Markdown 式）與裸網址 `https://…`（自動連結，遇空白、全形標點、括號即結束）。
+- `safeHref` 白名單：`http://`、`https://`、`mailto:`、單一 `/` 開頭的站內路徑（擋 `//host` 協定相對網址）。不符者（如 `javascript:`）整段原樣當純文字顯示，不建連結。
+- 連結一律 `target="_blank"` + `rel="noopener noreferrer"`，點連結不會關閉視窗、也不會中斷 `await` 中的儲存／流程推進。
+- SweetAlert2 改傳 `html: <div>`（**HTMLElement**，不是字串），所以仍不經過任何 HTML 字串解析；內文空白時不傳 `html`，維持原本不顯示內文區的行為。內建元件 `body.appendChild(buildRichText(...))`。
+- 內建元件的 `Enter` 快捷鍵在焦點位於 `<a>` 時放行，讓鍵盤使用者能用 Enter 開連結而不是誤按確定。
+- `{欄位代碼}` 代入發生在 runtime（`interpolateFields`）、連結解析發生在 `SdaDialog.show()`，因此 `[查看附件]({連結欄位})` 可用欄位值當網址；欄位值本身是網址時也會被自動連結。設定畫面預覽會把 `{欄位代碼}` 換成 `〔欄位代碼〕`，此時網址不合白名單、會顯示成純文字，屬預期。
+- 樣式 `.sda-dlg-link`（兩種渲染器共用），可用 `customCss` 覆寫。
 - 沒有取消鍵時 `Esc`／點擊外部視同「確定」，有取消鍵時視同「取消」；有取消鍵時另設 `allowOutsideClick: false`，避免誤觸外部就中止了儲存。
 
 **設定畫面不再使用原生 `alert` / `confirm`（v1.16.0）**

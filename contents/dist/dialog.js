@@ -151,6 +151,8 @@
       `.swal2-popup.sda-swal .swal2-title{font-size:${s.titleSize}px;}`,
       `.swal2-popup.sda-swal .swal2-html-container{white-space:pre;text-align:${s.align};font-size:${s.fontSize}px;line-height:${s.lineHeight};}`,
       `.swal2-popup.sda-swal .swal2-styled.swal2-confirm{background-color:${s.buttonColor};}`,
+      `.sda-dlg-link{color:#2c7be5;text-decoration:underline;word-break:break-all;}`,
+      `.sda-dlg-link:hover{color:#1a5fb4;}`,
     ];
     if (overrideSwalIcon) {
       swal.push(`.swal2-popup.sda-swal .swal2-icon{border-color:${accent};color:${accent};}`);
@@ -173,9 +175,36 @@
     styleEl.textContent = css;
   };
 
+  const LINK_RE = /\[([^\]\n]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>"'()\[\]「」『』【】〔〕、，。；！？]+)/g;
+  const safeHref = (u) => (/^(https?:\/\/|mailto:|\/(?!\/))/i.test(u) ? u : '');
+
+  const buildRichText = (text) => {
+    const frag = document.createDocumentFragment();
+    const src = String(text == null ? '' : text);
+    let last = 0;
+    src.replace(LINK_RE, (m, label, url, bare, idx) => {
+      const href = safeHref(bare || url);
+      if (!href) return m;
+      if (idx > last) frag.appendChild(document.createTextNode(src.slice(last, idx)));
+      const a = document.createElement('a');
+      a.className = 'sda-dlg-link';
+      a.href = href;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.textContent = bare || label;
+      frag.appendChild(a);
+      last = idx + m.length;
+      return m;
+    });
+    if (last < src.length) frag.appendChild(document.createTextNode(src.slice(last)));
+    return frag;
+  };
+
   const showViaSwal = (o, s, icon, hasCancel) => {
+    const text = String(o.text == null ? '' : o.text);
+    const body = document.createElement('div');
+    body.appendChild(buildRichText(text));
     const cfg = {
-      text: String(o.text == null ? '' : o.text),
       confirmButtonText: String(o.confirmLabel || 'OK'),
       showCancelButton: hasCancel,
       reverseButtons: true,
@@ -186,6 +215,7 @@
     };
     const title = String(o.title == null ? '' : o.title);
     if (title) cfg.title = title;
+    if (text) cfg.html = body;
     if (hasCancel) cfg.cancelButtonText = String(o.cancelLabel);
     if (icon !== 'none' && SWAL_ICONS[icon]) cfg.icon = SWAL_ICONS[icon];
 
@@ -247,7 +277,7 @@
 
     const body = document.createElement('div');
     body.className = 'sda-dlg-text';
-    body.textContent = String(o.text == null ? '' : o.text);
+    body.appendChild(buildRichText(o.text));
     box.appendChild(body);
 
     const btns = document.createElement('div');
@@ -282,7 +312,9 @@
 
     function onKey(e) {
       switch (e.key) {
-        case 'Enter':  e.preventDefault(); finish(true); break;
+        case 'Enter':
+          if (e.target && e.target.tagName === 'A') break;
+          e.preventDefault(); finish(true); break;
         case 'Escape': e.preventDefault(); finish(!hasCancel); break;
       }
     }

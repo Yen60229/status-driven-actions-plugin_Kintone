@@ -199,7 +199,7 @@ status-driven-actions-plugin/
   "dialog": {
     "icon": "warn",               // warn|info|success|error|question|none
     "title": "提醒",
-    "text": "※ 憑證請寫上單號【{請款單編號}】",  // 純文字，換行原樣保留；{欄位代碼} 會代入
+    "text": "※ 憑證請寫上單號【{請款單編號}】",  // 純文字，換行原樣保留；{欄位代碼} 會代入；[文字](網址) 或裸網址 https://… 會變連結（v1.23.0）
     "confirmLabel": "OK",
     "cancelLabel": "",            // 留空=只有確定鍵；填了才有取消鍵（僅 *.submit / process.proceed 有效）
     "cancelMessage": "已取消操作。",
